@@ -19,7 +19,7 @@
 ### Установка зависимостей
 ```bash
 # Клонирование репозитория
-git clone your-repo;
+git clone your-repo
 cd semantic-search
 
 # Установка зависимостей через Poetry

@@ -1,13 +1,19 @@
 [project]
 name = "semantic-search"
 version = "0.1.0"
-description = ""
+description = "Десктопное приложение для семантического поиска по документам с использованием Doc2Vec"
 authors = [
     {name = "Evgeny Odintsov",email = "ev1genial@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "pymupdf (>=1.26.0,<2.0.0)",
+    "pywin32 (>=310,<311)",
+    "python-docx (>=1.1.2,<2.0.0)",
+    "spacy (>=3.8.7,<4.0.0)",
+    "gensim (>=4.3.3,<5.0.0)",
+    "pyqt6 (>=6.9.1,<7.0.0)"
 ]
 
 [tool.poetry]
