@@ -1,0 +1,260 @@
+"""Модуль для обучения модели Doc2Vec"""
+
+import pickle
+from typing import List, Optional, Tuple
+
+from loguru import logger
+
+try:
+    from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+
+    GENSIM_AVAILABLE = True
+except ImportError:
+    logger.error("Gensim не установлен. Установите: pip install gensim")
+    GENSIM_AVAILABLE = False
+
+from semantic_search.config import DOC2VEC_CONFIG, MODELS_DIR
+
+
+class Doc2VecTrainer:
+    """Класс для обучения и управления моделью Doc2Vec"""
+
+    def __init__(self):
+        self.model: Optional[Doc2Vec] = None
+        self.config = DOC2VEC_CONFIG
+        self.corpus_info: Optional[List[Tuple[List[str], str, dict]]] = None
+
+    def create_tagged_documents(
+        self, corpus: List[Tuple[List[str], str, dict]]
+    ) -> List[TaggedDocument]:
+        """
+        Создание TaggedDocument объектов для gensim
+
+        Args:
+            corpus: Список кортежей (tokens, doc_id, metadata)
+
+        Returns:
+            Список TaggedDocument объектов
+        """
+        if not GENSIM_AVAILABLE:
+            raise ImportError("Gensim не доступен")
+
+        tagged_docs = []
+        for tokens, doc_id, metadata in corpus:
+            tagged_docs.append(TaggedDocument(words=tokens, tags=[doc_id]))
+
+        logger.info(f"Создано {len(tagged_docs)} TaggedDocument объектов")
+        return tagged_docs
+
+    def train_model(
+        self,
+        corpus: List[Tuple[List[str], str, dict]],
+        vector_size: Optional[int] = None,
+        window: Optional[int] = None,
+        min_count: Optional[int] = None,
+        epochs: Optional[int] = None,
+        workers: Optional[int] = None,
+    ) -> Optional[Doc2Vec]:
+        """
+        Обучение модели Doc2Vec
+
+        Args:
+            corpus: Подготовленный корпус
+            vector_size: Размерность векторов (по умолчанию из config)
+            window: Размер окна контекста
+            min_count: Минимальная частота слова
+            epochs: Количество эпох обучения
+            workers: Количество потоков
+
+        Returns:
+            Обученная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для обучения модели")
+            return None
+
+        if not corpus:
+            logger.error("Корпус пуст, обучение невозможно")
+            return None
+
+        # Используем параметры из config или переданные
+        params = {
+            "vector_size": vector_size or self.config["vector_size"],
+            "window": window or self.config["window"],
+            "min_count": min_count or self.config["min_count"],
+            "epochs": epochs or self.config["epochs"],
+            "workers": workers or self.config["workers"],
+            "seed": self.config["seed"],
+        }
+
+        logger.info("Подготовка данных для обучения...")
+        tagged_docs = self.create_tagged_documents(corpus)
+
+        logger.info("Начинаем обучение модели Doc2Vec с параметрами:")
+        for key, value in params.items():
+            logger.info(f"  {key}: {value}")
+
+        try:
+            # Создаем и обучаем модель
+            model = Doc2Vec(tagged_docs, **params)
+
+            self.model = model
+            self.corpus_info = corpus
+
+            logger.info("Обучение модели завершено успешно!")
+            logger.info(
+                f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
+            )
+            logger.info(f"Обучено векторов документов: {len(model.dv)}")
+
+            return model
+
+        except Exception as e:
+            logger.error(f"Ошибка при обучении модели: {e}")
+            return None
+
+    def save_model(
+        self, model: Optional[Doc2Vec] = None, model_name: str = "doc2vec_model"
+    ) -> bool:
+        """
+        Сохранение модели на диск
+
+        Args:
+            model: Модель для сохранения (по умолчанию self.model)
+            model_name: Имя файла модели
+
+        Returns:
+            True если сохранение успешно
+        """
+        model_to_save = model or self.model
+
+        if model_to_save is None:
+            logger.error("Нет модели для сохранения")
+            return False
+
+        try:
+            model_path = MODELS_DIR / f"{model_name}.model"
+            model_to_save.save(str(model_path))
+
+            # Сохраняем также информацию о корпусе
+            if self.corpus_info:
+                corpus_path = MODELS_DIR / f"{model_name}_corpus_info.pkl"
+                with open(corpus_path, "wb") as f:
+                    pickle.dump(self.corpus_info, f)
+                logger.info(f"Информация о корпусе сохранена: {corpus_path}")
+
+            logger.info(f"Модель сохранена: {model_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении модели: {e}")
+            return False
+
+    def load_model(self, model_name: str = "doc2vec_model") -> Optional[Doc2Vec]:
+        """
+        Загрузка модели с диска
+
+        Args:
+            model_name: Имя файла модели
+
+        Returns:
+            Загруженная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для загрузки модели")
+            return None
+
+        try:
+            model_path = MODELS_DIR / f"{model_name}.model"
+
+            if not model_path.exists():
+                logger.error(f"Файл модели не найден: {model_path}")
+                return None
+
+            model = Doc2Vec.load(str(model_path))
+            self.model = model
+
+            # Загружаем информацию о корпусе если есть
+            corpus_path = MODELS_DIR / f"{model_name}_corpus_info.pkl"
+            if corpus_path.exists():
+                with open(corpus_path, "rb") as f:
+                    self.corpus_info = pickle.load(f)
+                logger.info("Информация о корпусе загружена")
+
+            logger.info(f"Модель загружена: {model_path}")
+            logger.info(f"Векторов документов: {len(model.dv)}")
+            logger.info(f"Размерность векторов: {model.vector_size}")
+
+            return model
+
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке модели: {e}")
+            return None
+
+    def get_model_info(self) -> dict:
+        """
+        Получение информации о текущей модели
+
+        Returns:
+            Словарь с информацией о модели
+        """
+        if self.model is None:
+            return {"status": "no_model"}
+
+        return {
+            "status": "loaded",
+            "vector_size": self.model.vector_size,
+            "vocabulary_size": len(self.model.wv.key_to_index),
+            "documents_count": len(self.model.dv),
+            "window": self.model.window,
+            "min_count": self.model.min_count,
+            "epochs": self.model.epochs,
+        }
+
+    def update_model(self, new_corpus: List[Tuple[List[str], str, dict]]) -> bool:
+        """
+        Дообучение существующей модели на новых данных
+
+        Args:
+            new_corpus: Новые документы для дообучения
+
+        Returns:
+            True если дообучение успешно
+        """
+        if self.model is None:
+            logger.error("Нет загруженной модели для дообучения")
+            return False
+
+        if not new_corpus:
+            logger.warning("Новый корпус пуст")
+            return False
+
+        try:
+            logger.info("Начинаем дообучение модели...")
+
+            # Создаем TaggedDocument для новых данных
+            new_tagged_docs = self.create_tagged_documents(new_corpus)
+
+            # Обновляем словарь модели
+            self.model.build_vocab(new_tagged_docs, update=True)
+            logger.info("Словарь модели обновлен")
+
+            # Дообучаем модель
+            self.model.train(
+                new_tagged_docs,
+                total_examples=len(new_tagged_docs),
+                epochs=self.config["epochs"] // 2,  # Меньше эпох для дообучения
+            )
+
+            # Обновляем информацию о корпусе
+            if self.corpus_info:
+                self.corpus_info.extend(new_corpus)
+            else:
+                self.corpus_info = new_corpus
+
+            logger.info("Дообучение модели завершено успешно!")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка при дообучении модели: {e}")
+            return False
