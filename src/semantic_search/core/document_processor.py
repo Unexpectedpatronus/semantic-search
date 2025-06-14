@@ -11,7 +11,7 @@ from semantic_search.utils.text_utils import TextProcessor
 
 
 class ProcessedDocument(NamedTuple):
-    """Структура для хранения обработанного документа"""
+    """Структура для хранения обрабатываемого документа"""
 
     file_path: Path
     relative_path: str
@@ -21,9 +21,7 @@ class ProcessedDocument(NamedTuple):
 
 
 class DocumentProcessor:
-    """
-    Главный класс для обработки коллекции документов
-    """
+    """Главный класс для обработки коллекции документов"""
 
     def __init__(self):
         self.file_extractor = FileExtractor()

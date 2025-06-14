@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Optional
 
-import fitz  # PyMuPDF
+import pymupdf
 from docx import Document as DocxDocument
 from loguru import logger
 
@@ -77,7 +77,7 @@ class FileExtractor:
     def extract_from_pdf(self, file_path: Path) -> str:
         """Извлечение текста из PDF файла"""
         try:
-            doc = fitz.open(file_path)
+            doc = pymupdf.open(file_path)
             text = ""
 
             for page_num in range(doc.page_count):
