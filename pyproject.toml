@@ -16,15 +16,26 @@ dependencies = [
     "pyqt6 (>=6.9.1,<7.0.0)",
     "loguru (>=0.7.3,<0.8.0)",
     "click (>=8.2.1,<9.0.0)",
-    "tqdm (>=4.67.1,<5.0.0)"
+    "tqdm (>=4.67.1,<5.0.0)",
+    "scikit-learn (>=1.7.0,<2.0.0)"
 ]
+
+[project.scripts]
+semantic-search = "semantic_search.main:main"
+semantic-search-cli = "semantic_search.main:cli_mode"
 
 [tool.poetry]
 packages = [{include = "semantic_search", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.11.13"
+pytest = "^8.4.0"
+pytest-qt = "^4.4.0"
+pyinstaller = "^6.14.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
