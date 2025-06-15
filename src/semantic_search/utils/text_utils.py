@@ -4,20 +4,20 @@ import re
 
 from loguru import logger
 
-from semantic_search.config import TEXT_PROCESSING_CONFIG
+from semantic_search.config import SPACY_MODEL, TEXT_PROCESSING_CONFIG
 
 try:
     import spacy
     from spacy.lang.ru import Russian
 
-    # Попытка загрузки русской модели
+    # Попытка загрузки модели
     try:
-        nlp = spacy.load("ru_core_news_sm")
+        nlp = spacy.load(SPACY_MODEL)
         SPACY_AVAILABLE = True
-        logger.info("SpaCy модель ru_core_news_sm загружена")
+        logger.info(f"SpaCy модель {SPACY_MODEL} загружена")
     except OSError:
         logger.warning(
-            "SpaCy модель ru_core_news_sm не найдена. Будет использована базовая обработка"
+            f"SpaCy модель {SPACY_MODEL} не найдена. Будет использована базовая обработка"
         )
         nlp = Russian()
         SPACY_AVAILABLE = False
@@ -135,10 +135,12 @@ class TextProcessor:
         if not cleaned_text:
             return []
 
-        # Выбираем метод обработки
+        # Выбираем метод обработки в зависимости от доступности SpaCy
         if SPACY_AVAILABLE:
+            logger.debug("Используется SpaCy для препроцессинга")
             tokens = self.preprocess_with_spacy(cleaned_text)
         else:
+            logger.debug("Используется базовый препроцессинг")
             tokens = self.preprocess_basic(cleaned_text)
 
         return tokens
@@ -176,31 +178,3 @@ class TextProcessor:
                 if sent.strip() and len(sent.strip()) >= 10
             ]
             return sentences
-
-    def validate_text(self, text: str) -> bool:
-        """
-        Проверка валидности текста для обработки
-
-        Args:
-            text: Текст для проверки
-
-        Returns:
-            True если текст подходит для обработки
-        """
-        if not text:
-            return False
-
-        # Проверяем минимальную длину
-        if len(text) < self.config["min_text_length"]:
-            return False
-
-        # Проверяем максимальную длину
-        if len(text) > self.config["max_text_length"]:
-            return False
-
-        # Проверяем количество значимых токенов
-        tokens = self.preprocess_text(text)
-        if len(tokens) < self.config["min_tokens_count"]:
-            return False
-
-        return True

@@ -1,13 +1,17 @@
 """Модуль для суммаризации текстов"""
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec
 
 import numpy as np
 from loguru import logger
 
 from semantic_search.config import SUMMARIZATION_CONFIG
-from semantic_search.core.doc2vec_trainer import Doc2Vec
 from semantic_search.utils.text_utils import TextProcessor
 
 try:
@@ -181,11 +185,6 @@ class TextSummarizer:
         if not sentences:
             logger.warning("Не удалось разбить текст на предложения")
             return []
-
-        # Фильтруем слишком короткие предложения
-        sentences = [
-            sent for sent in sentences if len(sent) >= min_sentence_length
-        ]  # ????????????????????????????????????????????????????????????
 
         if len(sentences) <= sentences_count:
             logger.info("Количество предложений меньше или равно требуемому")

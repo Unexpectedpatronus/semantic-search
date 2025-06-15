@@ -1,10 +1,14 @@
 """Модуль для обучения модели Doc2Vec"""
 
+from __future__ import annotations
+
 import pickle
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 try:
     from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 
@@ -210,51 +214,3 @@ class Doc2VecTrainer:
             "min_count": self.model.min_count,
             "epochs": self.model.epochs,
         }
-
-    def update_model(self, new_corpus: List[Tuple[List[str], str, dict]]) -> bool:
-        """
-        Дообучение существующей модели на новых данных
-
-        Args:
-            new_corpus: Новые документы для дообучения
-
-        Returns:
-            True если дообучение успешно
-        """
-        if self.model is None:
-            logger.error("Нет загруженной модели для дообучения")
-            return False
-
-        if not new_corpus:
-            logger.warning("Новый корпус пуст")
-            return False
-
-        try:
-            logger.info("Начинаем дообучение модели...")
-
-            # Создаем TaggedDocument для новых данных
-            new_tagged_docs = self.create_tagged_documents(new_corpus)
-
-            # Обновляем словарь модели
-            self.model.build_vocab(new_tagged_docs, update=True)
-            logger.info("Словарь модели обновлен")
-
-            # Дообучаем модель
-            self.model.train(
-                new_tagged_docs,
-                total_examples=len(new_tagged_docs),
-                epochs=self.config["epochs"] // 2,  # Меньше эпох для дообучения
-            )
-
-            # Обновляем информацию о корпусе
-            if self.corpus_info:
-                self.corpus_info.extend(new_corpus)
-            else:
-                self.corpus_info = new_corpus
-
-            logger.info("Дообучение модели завершено успешно!")
-            return True
-
-        except Exception as e:
-            logger.error(f"Ошибка при дообучении модели: {e}")
-            return False

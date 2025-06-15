@@ -80,8 +80,7 @@ class FileExtractor:
             doc = pymupdf.open(file_path)
             text = ""
 
-            for page_num in range(doc.page_count):
-                page = doc.load_page(page_num)
+            for page in doc:
                 text += page.get_text()
 
             doc.close()

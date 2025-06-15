@@ -1,12 +1,15 @@
 """Модуль поискового движка"""
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec
 from loguru import logger
 
 from semantic_search.config import SEARCH_CONFIG
-from semantic_search.core.doc2vec_trainer import Doc2Vec
 from semantic_search.utils.text_utils import TextProcessor
 
 

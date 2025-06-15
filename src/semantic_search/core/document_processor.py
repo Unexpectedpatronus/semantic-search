@@ -1,5 +1,6 @@
 """Основной модуль для обработки документов"""
 
+from collections import Counter
 from pathlib import Path
 from typing import Generator, List, NamedTuple
 
@@ -59,18 +60,19 @@ class DocumentProcessor:
                 # Извлекаем текст
                 raw_text = self.file_extractor.extract_text(file_path)
 
-                # Валидация текста
-                if not self.text_processor.validate_text(raw_text):
-                    logger.warning(f"Текст не прошел валидацию: {file_path}")
-                    skipped_count += 1
-                    continue
-
                 # Обрезаем слишком длинный текст
                 if len(raw_text) > self.config["max_text_length"]:
                     raw_text = raw_text[: self.config["max_text_length"]]
                     logger.info(
                         f"Текст обрезан до {self.config['max_text_length']} символов"
                     )
+
+                if len(raw_text) < self.config["min_text_length"]:
+                    logger.warning(
+                        f"Текст слишком короткий ({len(raw_text)} символов): {file_path}"
+                    )
+                    skipped_count += 1
+                    continue
 
                 # Препроцессинг
                 tokens = self.text_processor.preprocess_text(raw_text)
@@ -163,9 +165,8 @@ class DocumentProcessor:
         stats["avg_tokens_per_doc"] = stats["total_tokens"] / stats["processed_files"]
 
         # Статистика по расширениям
-        for doc in docs_data:
-            ext = doc.metadata["extension"]
-            stats["extensions_count"][ext] = stats["extensions_count"].get(ext, 0) + 1
+        extensions_count = Counter(doc.metadata["extension"] for doc in docs_data)
+        stats["extensions_count"] = dict(extensions_count)
 
         # Самый большой и маленький документы
         docs_by_tokens = sorted(docs_data, key=lambda x: x.metadata["tokens_count"])

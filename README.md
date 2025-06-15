@@ -30,4 +30,5 @@ poetry shell
 
 # Установка SpaCy модели для русского языка
 poetry run python -m spacy download ru_core_news_sm
+poetry run python scripts/setup_spacy.py
 ```

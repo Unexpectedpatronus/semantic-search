@@ -5,21 +5,23 @@ import sys
 
 from loguru import logger
 
+from semantic_search.config import SPACY_MODEL
+
 
 def install_spacy_model():
     """Установка русской модели SpaCy"""
     try:
-        logger.info("Начинаем установку SpaCy модели ru_core_news_sm...")
+        logger.info(f"Начинаем установку SpaCy модели {SPACY_MODEL}...")
 
         result = subprocess.run(
-            [sys.executable, "-m", "spacy", "download", "ru_core_news_sm"],
+            [sys.executable, "-m", "spacy", "download", f"{SPACY_MODEL}"],
             capture_output=True,
             text=True,
         )
 
         if result.returncode == 0:
             logger.info("✅ SpaCy модель успешно установлена")
-            print("✅ SpaCy модель ru_core_news_sm установлена успешно!")
+            print(f"✅ SpaCy модель {SPACY_MODEL} установлена успешно!")
             return True
         else:
             logger.error(f"❌ Ошибка установки: {result.stderr}")
