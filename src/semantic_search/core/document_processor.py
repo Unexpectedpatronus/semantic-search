@@ -1,6 +1,5 @@
 """Основной модуль для обработки документов"""
 
-from collections import Counter
 from pathlib import Path
 from typing import Generator, List, NamedTuple
 
@@ -74,7 +73,7 @@ class DocumentProcessor:
                     skipped_count += 1
                     continue
 
-                # Препроцессинг
+                # препроцессор
                 tokens = self.text_processor.preprocess_text(raw_text)
 
                 if len(tokens) < self.config["min_tokens_count"]:
@@ -110,73 +109,3 @@ class DocumentProcessor:
         logger.info(
             f"Обработка завершена. Успешно: {processed_count}, Пропущено: {skipped_count}"
         )
-
-    def prepare_corpus_for_doc2vec(self, root_path: Path) -> List[tuple]:
-        """
-        Подготовка корпуса для обучения Doc2Vec
-
-        Args:
-            root_path: Путь к корневой директории
-
-        Returns:
-            Список кортежей (tokens, doc_id, metadata)
-        """
-        corpus = []
-
-        for doc in self.process_documents(root_path):
-            corpus.append(
-                (
-                    doc.tokens,
-                    doc.relative_path,
-                    doc.metadata,
-                )
-            )
-
-        logger.info(f"Подготовлен корпус из {len(corpus)} документов")
-        return corpus
-
-    def get_processing_statistics(self, root_path: Path) -> dict:
-        """
-        Получение статистики по обработке документов
-
-        Args:
-            root_path: Путь к корневой директории
-
-        Returns:
-            Словарь со статистикой
-        """
-        stats = {
-            "total_files": 0,
-            "processed_files": 0,
-            "total_tokens": 0,
-            "avg_tokens_per_doc": 0,
-            "extensions_count": dict,
-            "largest_doc": None,
-            "smallest_doc": None,
-        }
-
-        docs_data = list(self.process_documents(root_path))
-
-        if not docs_data:
-            return stats
-
-        stats["processed_files"] = len(docs_data)
-        stats["total_tokens"] = sum(doc.metadata["tokens_count"] for doc in docs_data)
-        stats["avg_tokens_per_doc"] = stats["total_tokens"] / stats["processed_files"]
-
-        # Статистика по расширениям
-        extensions_count = Counter(doc.metadata["extension"] for doc in docs_data)
-        stats["extensions_count"] = dict(extensions_count)
-
-        # Самый большой и маленький документы
-        docs_by_tokens = sorted(docs_data, key=lambda x: x.metadata["tokens_count"])
-        stats["smallest_doc"] = {
-            "path": docs_by_tokens[0].relative_path,
-            "tokens": docs_by_tokens[0].metadata["tokens_count"],
-        }
-        stats["largest_doc"] = {
-            "path": docs_by_tokens[-1].relative_path,
-            "tokens": docs_by_tokens[-1].metadata["tokens_count"],
-        }
-
-        return stats

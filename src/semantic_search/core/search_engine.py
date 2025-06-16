@@ -93,7 +93,7 @@ class SemanticSearchEngine:
         try:
             logger.info(f"Поиск по запросу: '{query}'")
 
-            # Препроцессинг запроса
+            # Препроцессор запроса
             query_tokens = self.text_processor.preprocess_text(query)
 
             if not query_tokens:

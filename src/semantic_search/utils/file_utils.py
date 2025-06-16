@@ -1,5 +1,6 @@
 """Утилиты для работы с файлами"""
 
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional
 
@@ -27,13 +28,8 @@ class FileExtractor:
             try:
                 self.word_app = win32com.client.Dispatch("Word.Application")
                 self.word_app.Visible = False
-                logger.info(
-                    "Word Application инициализирован для работы с .doc файлами"
-                )
             except Exception as e:
                 logger.warning(f"Не удалось инициализировать Word Application: {e}")
-                global DOC_SUPPORT
-                DOC_SUPPORT = False
 
     def __del__(self):
         """Освобождение ресурсов"""
@@ -67,8 +63,9 @@ class FileExtractor:
 
         # Логирование статистики
         logger.info(f"Найдено файлов: {len(found_files)}")
+        ext_counter = Counter(f.suffix.lower() for f in found_files)
         for ext in SUPPORTED_EXTENSIONS:
-            count = sum(1 for f in found_files if f.suffix.lower() == ext)
+            count = ext_counter.get(ext, 0)
             if count > 0:
                 logger.info(f"  {ext}: {count}")
 

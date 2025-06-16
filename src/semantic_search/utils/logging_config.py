@@ -40,9 +40,3 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
     logger.info("Система логирования настроена")
-
-
-# Создаем основной логгер для приложения
-def get_logger(name: str):
-    """Получение логгера для модуля"""
-    return logger.bind(name=name)
