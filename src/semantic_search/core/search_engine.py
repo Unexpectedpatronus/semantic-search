@@ -37,6 +37,9 @@ class SemanticSearchEngine:
         self.text_processor = TextProcessor()
         self.config = SEARCH_CONFIG
 
+        # Кэш для векторов запросов
+        self._query_cache = dict()
+
         # Создаем индекс метаданных для быстрого доступа
         self._metadata_index = dict()
         if self.corpus_info:
@@ -123,6 +126,43 @@ class SemanticSearchEngine:
         except Exception as e:
             logger.error(f"Ошибка при поиске: {e}")
             return []
+
+    def search_with_filters(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        file_extensions: Optional[set] = None,
+        date_range: Optional[tuple] = None,
+        min_file_size: Optional[int] = None,
+        max_file_size: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """Поиск с фильтрами"""
+
+        # Базовый поиск
+        results = self.search(query, top_k=top_k or 100)
+
+        # Применяем фильтры
+        filtered_results = []
+        for result in results:
+            metadata = result.metadata
+
+            # Фильтр по расширению
+            if file_extensions and metadata.get("extension") not in file_extensions:
+                continue
+
+            # Фильтр по размеру файла
+            file_size = metadata.get("file_size", 0)
+            if min_file_size and file_size < min_file_size:
+                continue
+            if max_file_size and file_size > max_file_size:
+                continue
+
+            filtered_results.append(result)
+
+            if len(filtered_results) >= (top_k or self.config["default_top_k"]):
+                break
+
+        return filtered_results
 
     def search_similar_to_document(
         self, doc_id: str, top_k: Optional[int] = None

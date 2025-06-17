@@ -1,0 +1,58 @@
+{
+  "text_processing": {
+    "min_text_length": 100,
+    "max_text_length": 500000,
+    "min_tokens_count": 10,
+    "min_token_length": 2,
+    "remove_stop_words": true,
+    "lemmatize": true,
+    "max_file_size_mb": 50,
+    "chunk_size": 10000
+  },
+  "doc2vec": {
+    "vector_size": 150,
+    "window": 10,
+    "min_count": 2,
+    "epochs": 40,
+    "workers": 15,
+    "seed": 42,
+    "dm": 1,
+    "negative": 5,
+    "hs": 0,
+    "sample": 0.0001
+  },
+  "search": {
+    "default_top_k": 10,
+    "max_top_k": 100,
+    "similarity_threshold": 0.1,
+    "enable_caching": true,
+    "cache_size": 1000,
+    "enable_filtering": true
+  },
+  "gui": {
+    "window_title": "Semantic Document Search",
+    "window_size": [
+      1400,
+      900
+    ],
+    "theme": "default",
+    "font_size": 10,
+    "enable_dark_theme": false,
+    "auto_save_settings": true
+  },
+  "summarization": {
+    "default_sentences_count": 5,
+    "max_sentences_count": 20,
+    "min_sentence_length": 15,
+    "use_textrank": true,
+    "damping_factor": 0.85,
+    "max_iterations": 100
+  },
+  "performance": {
+    "enable_monitoring": true,
+    "log_slow_operations": true,
+    "slow_operation_threshold": 5.0,
+    "memory_warning_threshold": 80,
+    "enable_profiling": false
+  }
+}

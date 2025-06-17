@@ -40,9 +40,15 @@ class DocumentProcessor:
         Yields:
             ProcessedDocument объекты
         """
+
+        if not root_path.exists():
+            raise FileNotFoundError(f"Директория не найдена: {root_path}")
+
+        if not root_path.is_dir():
+            raise NotADirectoryError(f"Путь не является директорией: {root_path}")
+
         logger.info(f"Начинаем обработку документов в: {root_path}")
 
-        # Находим все документы
         file_paths = self.file_extractor.find_documents(root_path)
 
         if not file_paths:
@@ -56,10 +62,16 @@ class DocumentProcessor:
             logger.info(f"Обработка {i}/{len(file_paths)}: {file_path.name}")
 
             try:
-                # Извлекаем текст
+                file_size = file_path.stat().st_size
+                if file_size > 50 * 1024 * 1024:  # 50MB
+                    logger.warning(
+                        f"Файл слишком большой ({file_size / 1024 / 1024:.1f}MB): {file_path}"
+                    )
+                    skipped_count += 1
+                    continue
+
                 raw_text = self.file_extractor.extract_text(file_path)
 
-                # Обрезаем слишком длинный текст
                 if len(raw_text) > self.config["max_text_length"]:
                     raw_text = raw_text[: self.config["max_text_length"]]
                     logger.info(
@@ -73,7 +85,6 @@ class DocumentProcessor:
                     skipped_count += 1
                     continue
 
-                # препроцессор
                 tokens = self.text_processor.preprocess_text(raw_text)
 
                 if len(tokens) < self.config["min_tokens_count"]:
@@ -81,10 +92,8 @@ class DocumentProcessor:
                     skipped_count += 1
                     continue
 
-                # Создаем относительный путь для ID документа
                 relative_path = str(file_path.relative_to(root_path))
 
-                # Собираем метаданные
                 metadata = {
                     "file_size": file_path.stat().st_size,
                     "extension": file_path.suffix,
@@ -101,6 +110,10 @@ class DocumentProcessor:
                     metadata=metadata,
                 )
 
+            except PermissionError:
+                logger.error(f"Нет доступа к файлу: {file_path}")
+                skipped_count += 1
+                continue
             except Exception as e:
                 logger.error(f"Ошибка при обработке {file_path}: {e}")
                 skipped_count += 1

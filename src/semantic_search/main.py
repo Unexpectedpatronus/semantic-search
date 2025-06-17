@@ -1,45 +1,56 @@
 """Точка входа в приложение"""
 
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 import click
 from loguru import logger
 
-from semantic_search.config import GUI_CONFIG
+from semantic_search.config import GUI_CONFIG, SPACY_MODEL
 from semantic_search.core.doc2vec_trainer import Doc2VecTrainer
 from semantic_search.core.document_processor import DocumentProcessor
 from semantic_search.core.search_engine import SemanticSearchEngine
 from semantic_search.core.text_summarizer import TextSummarizer
+from semantic_search.utils.file_utils import FileExtractor
 from semantic_search.utils.logging_config import setup_logging
+from semantic_search.utils.notification_system import notification_manager
+from semantic_search.utils.performance_monitor import PerformanceMonitor
 from semantic_search.utils.statistics import (
     calculate_model_statistics,
     calculate_statistics_from_processed_docs,
     format_statistics_for_display,
 )
+from semantic_search.utils.task_manager import task_manager
+from semantic_search.utils.text_utils import check_spacy_model_availability
+from semantic_search.utils.validators import DataValidator, FileValidator
+
+performance_monitor = PerformanceMonitor()
 
 
 def main():
     """Главная функция приложения"""
 
-    setup_logging()
-    # Проверяем SpaCy модель при запуске
-    from semantic_search.utils.text_utils import check_spacy_model_availability
-
-    spacy_info = check_spacy_model_availability()
-
-    if not spacy_info["model_loadable"]:
-        logger.warning(f"SpaCy модель недоступна: {spacy_info['error']}")
-        logger.info("Для установки: poetry run python scripts/setup_spacy.py")
-    else:
-        logger.info("✅ SpaCy модель готова к работе")
-
-    logger.info("Запуск приложения Semantic Document Search")
+    notification_manager.start()
 
     try:
+        setup_logging()
+
+        # Проверка SpaCy с уведомлением
+        spacy_info = check_spacy_model_availability()
+        if not spacy_info["model_loadable"]:
+            notification_manager.warning(
+                "SpaCy недоступен",
+                f"Модель {SPACY_MODEL} не найдена",
+                "Используйте: poetry run python scripts/setup_spacy.py",
+            )
+        else:
+            notification_manager.success(
+                "SpaCy готов", "Языковая модель загружена успешно"
+            )
+
         # Проверяем доступность PyQt6
-        from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QApplication
 
         # Создание приложения Qt
@@ -63,18 +74,14 @@ def main():
         logger.info(f"Приложение завершено с кодом: {exit_code}")
         sys.exit(exit_code)
 
-    except ImportError as e:
-        logger.error(f"Ошибка импорта: {e}")
-        print("Убедитесь, что все зависимости установлены:")
-        print("poetry install")
-        sys.exit(1)
-
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
-        import traceback
-
-        traceback.print_exc()
-        sys.exit(1)
+        notification_manager.error(
+            "Критическая ошибка", "Ошибка при запуске приложения", str(e)
+        )
+        raise
+    finally:
+        notification_manager.stop()
+        task_manager.shutdown()
 
 
 @click.group()
@@ -88,7 +95,8 @@ def cli():
 @click.option("--model", "-m", default="doc2vec_model", help="Имя модели")
 @click.option("--vector-size", default=150, help="Размерность векторов")
 @click.option("--epochs", default=40, help="Количество эпох обучения")
-def train(documents: str, model: str, vector_size: int, epochs: int):
+@click.option("--async-mode", "-a", is_flag=True, help="Асинхронное выполнение")
+def train(documents: str, model: str, vector_size: int, epochs: int, async_mode: bool):
     """
     Обучить модель Doc2Vec на корпусе документов
 
@@ -98,38 +106,167 @@ def train(documents: str, model: str, vector_size: int, epochs: int):
         vector_size: Размерность векторов
         epochs: Количество эпох обучения
     """
+    try:
+        # Валидация параметров
+        documents_path = DataValidator.validate_directory_path(Path(documents))
+        model_params = DataValidator.validate_model_params(
+            vector_size=vector_size, epochs=epochs
+        )
 
-    documents_path = Path(documents)
-    if not documents_path.exists():
-        logger.error(f"Папка не найдена: {documents_path}")
+        logger.info("Валидация прошла успешно")
+
+    except Exception as e:
+        click.echo(f"❌ Ошибка валидации: {e}")
         return
 
-    logger.info("Режим обучения модели")
+    def train_task(progress_tracker=None):
+        """Задача обучения модели"""
 
-    # Создаем обработчик документов
-    processor = DocumentProcessor()
+        with performance_monitor.measure_operation("document_processing"):
+            # Обработка документов
+            processor = DocumentProcessor()
+            processed_docs = []
 
-    # Обработка документов
-    processed_docs = list(processor.process_documents(documents_path))
-    if not processed_docs:
-        logger.error("Не удалось подготовить корпус")
-        return
-    corpus = [(doc.tokens, doc.relative_path, doc.metadata) for doc in processed_docs]
-    logger.info(f"Подготовлен корпус из {len(corpus)} документов")
+            file_extractor = FileExtractor()
+            file_paths = file_extractor.find_documents(documents_path)
 
-    # Обучение модели
-    trainer = Doc2VecTrainer()
-    trained_model = trainer.train_model(corpus, vector_size=vector_size, epochs=epochs)
+            if progress_tracker:
+                progress_tracker.total_steps = len(file_paths) + epochs + 2
+                progress_tracker.update(0, "Начинаем обработку документов...")
 
-    if trained_model:
-        trainer.save_model(trained_model, model)
-        logger.info("✅ Модель обучена и сохранена")
+            for i, doc in enumerate(processor.process_documents(documents_path)):
+                processed_docs.append(doc)
+                if progress_tracker:
+                    progress_tracker.update(
+                        i + 1, f"Обработан документ: {doc.relative_path}"
+                    )
 
-        # Показываем статистику
-        stats = calculate_statistics_from_processed_docs(processed_docs)
-        click.echo(f"\n{format_statistics_for_display(stats)}")
+            if not processed_docs:
+                raise ValueError("Не удалось обработать документы")
+
+            corpus = [
+                (doc.tokens, doc.relative_path, doc.metadata) for doc in processed_docs
+            ]
+
+            if progress_tracker:
+                progress_tracker.update(message="Подготовка к обучению модели...")
+
+        with performance_monitor.measure_operation("model_training"):
+            # Обучение модели
+            trainer = Doc2VecTrainer()
+
+            # Создаем модель с прогресс трекингом
+            class ProgressDoc2Vec:
+                def __init__(self, trainer, progress_tracker):
+                    self.trainer = trainer
+                    self.progress_tracker = progress_tracker
+
+                def train_with_progress(self, corpus, **kwargs):
+                    """Обучение с отслеживанием прогресса"""
+
+                    # Создаем tagged documents
+                    tagged_docs = self.trainer.create_tagged_documents(corpus)
+
+                    from gensim.models.doc2vec import Doc2Vec
+
+                    model = Doc2Vec(
+                        vector_size=kwargs.get("vector_size", 150),
+                        window=kwargs.get("window", 10),
+                        min_count=kwargs.get("min_count", 2),
+                        workers=kwargs.get("workers", 4),
+                        seed=42,
+                    )
+
+                    # Построение словаря
+                    model.build_vocab(tagged_docs)
+
+                    if self.progress_tracker:
+                        self.progress_tracker.update(
+                            message="Словарь построен, начинаем обучение..."
+                        )
+
+                    # Обучение по эпохам
+                    for epoch in range(kwargs.get("epochs", 40)):
+                        model.train(
+                            tagged_docs, total_examples=model.corpus_count, epochs=1
+                        )
+
+                        if self.progress_tracker:
+                            progress_step = len(processed_docs) + epoch + 1
+                            self.progress_tracker.update(
+                                progress_step,
+                                f"Эпоха {epoch + 1}/{kwargs.get('epochs', 40)}",
+                            )
+
+                    return model
+
+            progress_trainer = ProgressDoc2Vec(trainer, progress_tracker)
+            trained_model = progress_trainer.train_with_progress(
+                corpus, vector_size=vector_size, epochs=epochs
+            )
+
+            if trained_model:
+                trainer.model = trained_model
+                trainer.corpus_info = corpus
+                trainer.save_model(trained_model, model)
+
+                if progress_tracker:
+                    progress_tracker.finish("Модель обучена и сохранена")
+
+                # Возвращаем статистику
+                stats = calculate_statistics_from_processed_docs(processed_docs)
+                return {
+                    "model_saved": True,
+                    "documents_processed": len(processed_docs),
+                    "vocabulary_size": len(trained_model.wv.key_to_index),
+                    "statistics": stats,
+                }
+            else:
+                raise ValueError("Не удалось обучить модель")
+
+    if async_mode:
+        # Асинхронное выполнение
+        notification_manager.start()
+
+        task_id = task_manager.submit_task(
+            train_task,
+            name=f"Обучение модели {model}",
+            description=f"Обучение на документах из {documents_path}",
+            track_progress=True,
+            total_steps=100,  # Примерное количество шагов
+        )
+
+        click.echo(f"🔄 Задача обучения запущена (ID: {task_id})")
+        click.echo("Используйте команду 'status' для проверки прогресса")
+
+        # Подписка на уведомления для консоли
+        def console_notification_handler(notification):
+            if notification.type.value == "success":
+                click.echo(f"✅ {notification.title}: {notification.message}")
+            elif notification.type.value == "error":
+                click.echo(f"❌ {notification.title}: {notification.message}")
+            elif notification.type.value == "warning":
+                click.echo(f"⚠️ {notification.title}: {notification.message}")
+
+        notification_manager.subscribe(console_notification_handler)
+
     else:
-        logger.error("❌ Ошибка обучения модели")
+        # Синхронное выполнение
+        try:
+            with performance_monitor.measure_operation("full_training"):
+                result = train_task()
+
+            click.echo("✅ Обучение завершено успешно!")
+            click.echo(f"📊 Обработано документов: {result['documents_processed']}")
+            click.echo(f"📚 Размер словаря: {result['vocabulary_size']:,}")
+
+            # Выводим детальную статистику
+            stats_display = format_statistics_for_display(result["statistics"])
+            click.echo(f"\n{stats_display}")
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка при обучении: {e}")
+            logger.error(f"Ошибка обучения модели: {e}")
 
 
 @cli.command()
@@ -614,6 +751,186 @@ def summarize_batch(
 
     if output_dir and successful > 0:
         click.echo(f"  💾 Выжимки сохранены в: {output_path}")
+
+
+@cli.command()
+def status():
+    """Проверка статуса выполняющихся задач"""
+
+    tasks = task_manager.get_all_tasks()
+
+    if not tasks:
+        click.echo("📭 Активных задач нет")
+        return
+
+    click.echo("📋 Статус задач:")
+    click.echo("=" * 60)
+
+    for task in tasks:
+        status_icon = {
+            "pending": "⏳",
+            "running": "🔄",
+            "completed": "✅",
+            "failed": "❌",
+            "cancelled": "⏹️",
+        }.get(task.status.value, "❓")
+
+        click.echo(f"{status_icon} {task.name}")
+        click.echo(f"   ID: {task.id}")
+        click.echo(f"   Статус: {task.status.value}")
+
+        if task.progress > 0:
+            progress_bar = "█" * int(task.progress * 20) + "░" * (
+                20 - int(task.progress * 20)
+            )
+            click.echo(f"   Прогресс: [{progress_bar}] {task.progress:.1%}")
+
+        if task.duration:
+            click.echo(f"   Время: {task.duration:.1f}с")
+
+        if task.error:
+            click.echo(f"   Ошибка: {task.error}")
+
+        click.echo()
+
+
+@cli.command()
+@click.argument("task_id")
+def cancel(task_id: str):
+    """Отмена задачи"""
+
+    if task_manager.cancel_task(task_id):
+        click.echo(f"✅ Задача {task_id} отменена")
+    else:
+        click.echo(f"❌ Не удалось отменить задачу {task_id}")
+
+
+@cli.command()
+@click.option(
+    "--max-keep", default=50, help="Максимальное количество задач для хранения"
+)
+def cleanup(max_keep: int):
+    """Очистка завершенных задач"""
+
+    before_count = len(task_manager.get_all_tasks())
+    task_manager.cleanup_finished_tasks(max_keep)
+    after_count = len(task_manager.get_all_tasks())
+
+    removed = before_count - after_count
+    click.echo(f"🧹 Удалено {removed} завершенных задач")
+
+
+@cli.command()
+@click.option("--documents", "-d", help="Путь к папке с документами")
+@click.option("--output", "-o", help="Файл для сохранения отчета")
+def system_info(documents: Optional[str], output: Optional[str]):
+    """Системная информация и диагностика"""
+
+    info_lines = []
+
+    # Системная информация
+    system_info = performance_monitor.get_system_info()
+    info_lines.extend(
+        [
+            "🖥️ Системная информация:",
+            f"   CPU: {system_info['cpu_count']} ядер, загрузка {system_info['cpu_percent']}%",
+            f"   ОЗУ: {system_info['memory_available']:.1f}/{system_info['memory_total']:.1f} ГБ свободно",
+            f"   Диск: {100 - system_info['disk_usage']:.1f}% свободно",
+            "",
+        ]
+    )
+
+    # Статус SpaCy
+    spacy_info = check_spacy_model_availability()
+    spacy_status = "✅ Готов" if spacy_info["model_loadable"] else "❌ Не готов"
+    info_lines.extend(
+        [
+            "🧠 Языковая модель:",
+            f"   SpaCy: {spacy_status}",
+            f"   Модель: {SPACY_MODEL}",
+            "",
+        ]
+    )
+
+    # Информация о документах
+    if documents:
+        try:
+            docs_path = Path(documents)
+            if docs_path.exists():
+                file_extractor = FileExtractor()
+                found_files = file_extractor.find_documents(docs_path)
+
+                # Валидация файлов
+                valid_files = 0
+                invalid_files = 0
+                total_size = 0
+
+                for file_path in found_files:
+                    validation = FileValidator.validate_document_file(file_path)
+                    if validation["valid"]:
+                        valid_files += 1
+                        total_size += validation["file_info"]["size"]
+                    else:
+                        invalid_files += 1
+
+                info_lines.extend(
+                    [
+                        "📁 Анализ документов:",
+                        f"   Всего найдено: {len(found_files)}",
+                        f"   Валидных: {valid_files}",
+                        f"   С ошибками: {invalid_files}",
+                        f"   Общий размер: {total_size / 1024 / 1024:.1f} МБ",
+                        "",
+                    ]
+                )
+
+        except Exception as e:
+            info_lines.extend(["📁 Анализ документов:", f"   ❌ Ошибка: {e}", ""])
+
+    # Производительность
+    if performance_monitor.metrics:
+        info_lines.extend(
+            [
+                "⚡ Последние операции:",
+            ]
+        )
+
+        for op_name, metrics in list(performance_monitor.metrics.items())[-5:]:
+            info_lines.append(f"   {op_name}: {metrics['duration']:.2f}с")
+
+        info_lines.append("")
+
+    # Активные задачи
+    running_tasks = task_manager.get_running_tasks()
+    if running_tasks:
+        info_lines.extend(
+            [
+                "🔄 Активные задачи:",
+            ]
+        )
+
+        for task in running_tasks:
+            info_lines.append(f"   {task.name}: {task.progress:.1%}")
+
+        info_lines.append("")
+
+    report = "\n".join(info_lines)
+
+    # Вывод в консоль
+    click.echo(report)
+
+    # Сохранение в файл
+    if output:
+        try:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(f"Системный отчет - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(report)
+
+            click.echo(f"💾 Отчет сохранен в: {output}")
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка сохранения отчета: {e}")
 
 
 def cli_mode():

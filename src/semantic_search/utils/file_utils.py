@@ -1,8 +1,9 @@
 """Утилиты для работы с файлами"""
 
+import time
 from collections import Counter
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pymupdf
 from docx import Document as DocxDocument
@@ -72,20 +73,114 @@ class FileExtractor:
         return found_files
 
     def extract_from_pdf(self, file_path: Path) -> str:
-        """Извлечение текста из PDF файла"""
+        """Улучшенная извлечение текста из PDF с обработкой больших файлов"""
         try:
             doc = pymupdf.open(file_path)
-            text = ""
+            text_parts = []
 
-            for page in doc:
-                text += page.get_text()
+            # Проверяем количество страниц
+            total_pages = len(doc)
+            if total_pages > 1000:
+                logger.warning(
+                    f"PDF содержит {total_pages} страниц. Обработка может занять время"
+                )
+
+            # Обрабатываем с прогресс-баром для больших файлов
+            page_iterator = range(len(doc))
+            if total_pages > 50:
+                try:
+                    from tqdm import tqdm
+
+                    page_iterator = tqdm(
+                        page_iterator, desc=f"Извлечение из {file_path.name}"
+                    )
+                except ImportError:
+                    pass
+
+            for page_num in page_iterator:
+                try:
+                    page = doc[page_num]
+                    page_text = page.get_text()
+
+                    # Фильтруем явно мусорные страницы
+                    if len(page_text.strip()) > 50:  # Минимум 50 символов
+                        text_parts.append(page_text)
+
+                except Exception as e:
+                    logger.warning(f"Ошибка при обработке страницы {page_num}: {e}")
+                    continue
 
             doc.close()
-            return text.strip()
+
+            full_text = "\n".join(text_parts)
+            logger.info(f"Извлечено {len(full_text)} символов из {total_pages} страниц")
+
+            return full_text.strip()
 
         except Exception as e:
             logger.error(f"Ошибка при извлечении текста из PDF {file_path}: {e}")
             return ""
+
+    def extract_text_with_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """Извлечение текста с метаданными"""
+        result = {
+            "text": "",
+            "metadata": {
+                "file_path": str(file_path),
+                "file_size": 0,
+                "creation_time": None,
+                "modification_time": None,
+                "pages_count": 0,
+                "extraction_time": 0,
+            },
+        }
+
+        start_time = time.time()
+
+        try:
+            # Базовые метаданные файла
+            stat = file_path.stat()
+            result["metadata"].update(
+                {
+                    "file_size": stat.st_size,
+                    "creation_time": stat.st_ctime,
+                    "modification_time": stat.st_mtime,
+                }
+            )
+
+            # Извлечение текста
+            text = self.extract_text(file_path)
+            result["text"] = text
+
+            # Дополнительные метаданные для PDF
+            if file_path.suffix.lower() == ".pdf":
+                try:
+                    doc = pymupdf.open(file_path)
+                    result["metadata"]["pages_count"] = len(doc)
+
+                    # Метаданные документа PDF
+                    pdf_metadata = doc.metadata
+                    if pdf_metadata:
+                        result["metadata"].update(
+                            {
+                                "title": pdf_metadata.get("title", ""),
+                                "author": pdf_metadata.get("author", ""),
+                                "subject": pdf_metadata.get("subject", ""),
+                                "creator": pdf_metadata.get("creator", ""),
+                            }
+                        )
+                    doc.close()
+
+                except Exception as e:
+                    logger.debug(f"Не удалось получить PDF метаданные: {e}")
+
+            result["metadata"]["extraction_time"] = time.time() - start_time
+
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста с метаданными {file_path}: {e}")
+            result["metadata"]["extraction_time"] = time.time() - start_time
+
+        return result
 
     def extract_from_docx(self, file_path: Path) -> str:
         """Извлечение текста из DOCX файла"""

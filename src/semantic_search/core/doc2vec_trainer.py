@@ -50,7 +50,7 @@ class Doc2VecTrainer:
         logger.info(f"Создано {len(tagged_docs)} TaggedDocument объектов")
         return tagged_docs
 
-    def train_model(
+    def _train_standard(
         self,
         corpus: List[Tuple[List[str], str, dict]],
         vector_size: Optional[int] = None,
@@ -116,6 +116,82 @@ class Doc2VecTrainer:
         except Exception as e:
             logger.error(f"Ошибка при обучении модели: {e}")
             return None
+
+    def train_model(
+        self,
+        corpus: List[Tuple[List[str], str, dict]],
+        vector_size: Optional[int] = None,
+        window: Optional[int] = None,
+        min_count: Optional[int] = None,
+        epochs: Optional[int] = None,
+        workers: Optional[int] = None,
+    ) -> Optional[Doc2Vec]:
+        """
+        Обучение модели Doc2Vec с оптимизацией под объём корпуса.
+
+        Для небольших корпусов используется стандартное обучение.
+        Для больших корпусов (> 10 000 документов) применяется поэпоховое обучение.
+
+        Args:
+            corpus: Подготовленный корпус, где каждый элемент — кортеж (токены, тег, метаданные)
+            vector_size: Размерность векторов (по умолчанию из self.config)
+            window: Размер окна контекста (по умолчанию из self.config)
+            min_count: Минимальная частота слова (по умолчанию из self.config)
+            epochs: Количество эпох обучения (по умолчанию из self.config)
+            workers: Количество потоков (по умолчанию из self.config)
+
+        Returns:
+            Обученная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для обучения модели")
+            return None
+
+        if not corpus:
+            logger.error("Корпус пуст, обучение невозможно")
+            return None
+
+        if len(corpus) > 10000:
+            logger.info("Большой корпус обнаружен. Используем поэпоховое обучение...")
+
+            tagged_docs = self.create_tagged_documents(corpus)
+
+            model = Doc2Vec(
+                vector_size=vector_size or self.config["vector_size"],
+                window=window or self.config["window"],
+                min_count=min_count or self.config["min_count"],
+                workers=workers or self.config["workers"],
+                seed=self.config["seed"],
+            )
+
+            model.build_vocab(tagged_docs)
+            logger.info(f"Словарь построен: {len(model.wv.key_to_index)} слов")
+
+            training_epochs = epochs or self.config["epochs"]
+
+            for epoch in range(training_epochs):
+                logger.info(f"Эпоха {epoch + 1}/{training_epochs}...")
+                model.train(tagged_docs, total_examples=model.corpus_count, epochs=1)
+
+            self.model = model
+            self.corpus_info = corpus
+
+            logger.info("Обучение завершено успешно!")
+            logger.info(
+                f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
+            )
+            logger.info(f"Обучено векторов документов: {len(model.dv)}")
+
+            return model
+        else:
+            return self._train_standard(
+                corpus,
+                vector_size=vector_size,
+                window=window,
+                min_count=min_count,
+                epochs=epochs,
+                workers=workers,
+            )
 
     def save_model(
         self, model: Optional[Doc2Vec] = None, model_name: str = "doc2vec_model"
