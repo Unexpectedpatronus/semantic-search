@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -9,7 +10,8 @@ if TYPE_CHECKING:
     from gensim.models.doc2vec import Doc2Vec
 from loguru import logger
 
-from semantic_search.config import SEARCH_CONFIG
+from semantic_search.config import CACHE_DIR, SEARCH_CONFIG
+from semantic_search.utils.cache_manager import CacheManager
 from semantic_search.utils.text_utils import TextProcessor
 
 
@@ -37,8 +39,7 @@ class SemanticSearchEngine:
         self.text_processor = TextProcessor()
         self.config = SEARCH_CONFIG
 
-        # Кэш для векторов запросов
-        self._query_cache = dict()
+        self.cache_manager = CacheManager(CACHE_DIR)
 
         # Создаем индекс метаданных для быстрого доступа
         self._metadata_index = dict()
@@ -63,7 +64,7 @@ class SemanticSearchEngine:
 
         logger.info("Поисковая модель установлена")
 
-    def search(
+    def search_old(
         self,
         query: str,
         top_k: Optional[int] = None,
@@ -139,7 +140,7 @@ class SemanticSearchEngine:
         """Поиск с фильтрами"""
 
         # Базовый поиск
-        results = self.search(query, top_k=top_k or 100)
+        results = self.search_old(query, top_k=top_k or 100)
 
         # Применяем фильтры
         filtered_results = []
@@ -163,6 +164,85 @@ class SemanticSearchEngine:
                 break
 
         return filtered_results
+
+    def make_cache_key(
+        self,
+        query: str,
+        top_k: Optional[int],
+        file_extensions: Optional[set],
+        date_range: Optional[tuple],
+        min_file_size: Optional[int],
+        max_file_size: Optional[int],
+    ) -> str:
+        """Генерация стабильного кэш-ключа для поискового запроса"""
+        key_data = {
+            "query": query.strip().lower(),
+            "top_k": top_k,
+            "file_extensions": sorted(file_extensions) if file_extensions else None,
+            "date_range": date_range,
+            "min_file_size": min_file_size,
+            "max_file_size": max_file_size,
+        }
+        return json.dumps(key_data, sort_keys=True, ensure_ascii=False)
+
+    def search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        file_extensions: Optional[set] = None,
+        date_range: Optional[tuple] = None,
+        min_file_size: Optional[int] = None,
+        max_file_size: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """
+        Поиск с кэшированием и поддержкой фильтров
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+            file_extensions: Фильтр по расширениям файлов
+            date_range: Фильтр по дате (не используется, но оставлено для совместимости)
+            min_file_size: Минимальный размер файла
+            max_file_size: Максимальный размер файла
+
+        Returns:
+            Список результатов поиска
+        """
+        if not self.config.get("enable_caching", True):
+            return self.search_with_filters(
+                query,
+                top_k=top_k,
+                file_extensions=file_extensions,
+                date_range=date_range,
+                min_file_size=min_file_size,
+                max_file_size=max_file_size,
+            )
+        # Генерируем стабильный ключ
+        raw_key = self.make_cache_key(
+            query, top_k, file_extensions, date_range, min_file_size, max_file_size
+        )
+        cache_key = f"search:{raw_key}"
+
+        # Проверяем кэш
+        cached_result = self.cache_manager.get(cache_key)
+        if cached_result:
+            logger.info(f"Результат получен из кэша для запроса: {query}")
+            return cached_result
+
+        # Выполняем поиск
+        results = self.search_with_filters(
+            query,
+            top_k=top_k,
+            file_extensions=file_extensions,
+            date_range=date_range,
+            min_file_size=min_file_size,
+            max_file_size=max_file_size,
+        )
+
+        # Сохраняем в кэш
+        self.cache_manager.set(cache_key, results)
+
+        return results
 
     def search_similar_to_document(
         self, doc_id: str, top_k: Optional[int] = None
