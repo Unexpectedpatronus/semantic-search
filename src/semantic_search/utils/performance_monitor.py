@@ -1,55 +1,44 @@
-"""Мониторинг производительности"""
+"""Контекстный мониторинг производительности операций"""
 
 import time
 from contextlib import contextmanager
-from typing import Any, Dict
+from typing import Dict, Generator
 
 import psutil
 from loguru import logger
 
 
 class PerformanceMonitor:
-    """Мониторинг производительности операций"""
+    """Класс для измерения времени и использования памяти"""
 
     def __init__(self):
-        self.metrics = {}
+        self.metrics: Dict[str, Dict[str, float]] = {}
+        self.process = psutil.Process()
 
     @contextmanager
-    def measure_operation(self, operation_name: str):
-        """Контекстный менеджер для измерения времени операции"""
-        start_time = time.time()
-        start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+    def measure_operation(self, name: str) -> Generator[None, None, None]:
+        start_time = time.perf_counter()
+        start_mem = self._get_memory()
 
         try:
             yield
         finally:
-            end_time = time.time()
-            end_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+            end_time = time.perf_counter()
+            end_mem = self._get_memory()
 
-            duration = end_time - start_time
-            memory_delta = end_memory - start_memory
-
-            self.metrics[operation_name] = {
-                "duration": duration,
-                "memory_start": start_memory,
-                "memory_end": end_memory,
-                "memory_delta": memory_delta,
-                "timestamp": time.time(),
+            self.metrics[name] = {
+                "duration_sec": round(end_time - start_time, 4),
+                "memory_start_mb": round(start_mem, 3),
+                "memory_end_mb": round(end_mem, 3),
+                "memory_delta_mb": round(end_mem - start_mem, 3),
             }
 
-            logger.info(
-                f"{operation_name}: {duration:.2f}s, Память: {memory_delta:+.1f}MB"
+            logger.debug(
+                f"[{name}] duration: {end_time - start_time:.4f}s, memory delta: {end_mem - start_mem:.3f}MB"
             )
 
-    def get_system_info(self) -> Dict[str, Any]:
-        """Получение информации о системе"""
-        return {
-            "cpu_count": psutil.cpu_count(),
-            "cpu_percent": psutil.cpu_percent(interval=1),
-            "memory_total": psutil.virtual_memory().total / 1024**3,  # GB
-            "memory_available": psutil.virtual_memory().available / 1024**3,  # GB
-            "memory_percent": psutil.virtual_memory().percent,
-            "disk_usage": psutil.disk_usage("/").percent
-            if psutil.disk_usage("/")
-            else 0,
-        }
+    def _get_memory(self) -> float:
+        return self.process.memory_info().rss / 1024 / 1024
+
+    def get_metrics(self) -> Dict[str, Dict[str, float]]:
+        return self.metrics

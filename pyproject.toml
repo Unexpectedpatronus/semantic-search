@@ -38,6 +38,8 @@ pytest-cov = "^6.2.1"
 pytest-benchmark = "^5.1.0"
 mypy = "^1.16.1"
 pre-commit = "^4.2.0"
+types-psutil = "^7.0.0.20250601"
+types-pywin32 = "^310.0.0.20250516"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -45,3 +47,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+

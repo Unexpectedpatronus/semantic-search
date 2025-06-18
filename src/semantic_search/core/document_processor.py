@@ -1,7 +1,8 @@
-"""Основной модуль для обработки документов"""
+"""Модуль для обработки документов"""
 
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Generator, List, NamedTuple
+from typing import Generator, List, Optional
 
 from loguru import logger
 
@@ -10,115 +11,54 @@ from semantic_search.utils.file_utils import FileExtractor
 from semantic_search.utils.text_utils import TextProcessor
 
 
-class ProcessedDocument(NamedTuple):
-    """Структура для хранения обрабатываемого документа"""
+@dataclass
+class ProcessedDocument:
+    """Класс для представления обработанного документа"""
 
     file_path: Path
     relative_path: str
     raw_text: str
     tokens: List[str]
-    metadata: dict
+    metadata: Optional[dict] = None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["file_path"] = str(data["file_path"])
+        return data
 
 
 class DocumentProcessor:
-    """Главный класс для обработки коллекции документов"""
+    """Класс для обработки коллекции документов"""
 
-    def __init__(self):
-        self.file_extractor = FileExtractor()
-        self.text_processor = TextProcessor()
-        self.config = TEXT_PROCESSING_CONFIG
+    def __init__(
+        self,
+        file_extractor: Optional[FileExtractor] = None,
+        text_processor: Optional[TextProcessor] = None,
+        config: Optional[dict] = None,
+    ):
+        self.file_extractor = file_extractor or FileExtractor()
+        self.text_processor = text_processor or TextProcessor()
+        self.config = config or TEXT_PROCESSING_CONFIG
 
     def process_documents(
         self, root_path: Path
     ) -> Generator[ProcessedDocument, None, None]:
-        """
-        Основная функция обработки документов
-
-        Args:
-            root_path: Путь к корневой директории с документами
-
-        Yields:
-            ProcessedDocument объекты
-        """
-
-        if not root_path.exists():
-            raise FileNotFoundError(f"Директория не найдена: {root_path}")
-
-        if not root_path.is_dir():
-            raise NotADirectoryError(f"Путь не является директорией: {root_path}")
-
-        logger.info(f"Начинаем обработку документов в: {root_path}")
-
+        """Обрабатывает документы в директории"""
         file_paths = self.file_extractor.find_documents(root_path)
+        logger.info(f"Найдено {len(file_paths)} файлов для обработки.")
 
-        if not file_paths:
-            logger.warning("Документы не найдены")
-            return
-
-        processed_count = 0
-        skipped_count = 0
-
-        for i, file_path in enumerate(file_paths, 1):
-            logger.info(f"Обработка {i}/{len(file_paths)}: {file_path.name}")
-
+        for file_path in file_paths:
             try:
-                file_size = file_path.stat().st_size
-                if file_size > 50 * 1024 * 1024:  # 50MB
-                    logger.warning(
-                        f"Файл слишком большой ({file_size / 1024 / 1024:.1f}MB): {file_path}"
-                    )
-                    skipped_count += 1
-                    continue
-
                 raw_text = self.file_extractor.extract_text(file_path)
-
-                if len(raw_text) > self.config["max_text_length"]:
-                    raw_text = raw_text[: self.config["max_text_length"]]
-                    logger.info(
-                        f"Текст обрезан до {self.config['max_text_length']} символов"
-                    )
-
-                if len(raw_text) < self.config["min_text_length"]:
-                    logger.warning(
-                        f"Текст слишком короткий ({len(raw_text)} символов): {file_path}"
-                    )
-                    skipped_count += 1
-                    continue
-
                 tokens = self.text_processor.preprocess_text(raw_text)
+                rel_path = str(file_path.relative_to(root_path))
 
-                if len(tokens) < self.config["min_tokens_count"]:
-                    logger.warning(f"Слишком мало токенов ({len(tokens)}): {file_path}")
-                    skipped_count += 1
-                    continue
-
-                relative_path = str(file_path.relative_to(root_path))
-
-                metadata = {
-                    "file_size": file_path.stat().st_size,
-                    "extension": file_path.suffix,
-                    "tokens_count": len(tokens),
-                    "text_length": len(raw_text),
-                }
-
-                processed_count += 1
                 yield ProcessedDocument(
                     file_path=file_path,
-                    relative_path=relative_path,
+                    relative_path=rel_path,
                     raw_text=raw_text,
                     tokens=tokens,
-                    metadata=metadata,
+                    metadata={"file_size": file_path.stat().st_size},
                 )
-
-            except PermissionError:
-                logger.error(f"Нет доступа к файлу: {file_path}")
-                skipped_count += 1
-                continue
             except Exception as e:
-                logger.error(f"Ошибка при обработке {file_path}: {e}")
-                skipped_count += 1
-                continue
-
-        logger.info(
-            f"Обработка завершена. Успешно: {processed_count}, Пропущено: {skipped_count}"
-        )
+                logger.warning(f"Ошибка при обработке файла {file_path}: {e}")

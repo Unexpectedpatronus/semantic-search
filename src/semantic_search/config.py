@@ -8,6 +8,19 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+__all__ = [
+    "AppConfig",
+    "ConfigManager",
+    "config_manager",
+    "TEXT_PROCESSING_CONFIG",
+    "DOC2VEC_CONFIG",
+    "SEARCH_CONFIG",
+    "GUI_CONFIG",
+    "SUMMARIZATION_CONFIG",
+    "SUPPORTED_EXTENSIONS",
+    "SPACY_MODEL",
+]
+
 # Базовые пути
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -27,35 +40,24 @@ for dir_path in [DATA_DIR, MODELS_DIR, TEMP_DIR, LOGS_DIR, CACHE_DIR, CONFIG_DIR
 class AppConfig:
     """Главная конфигурация приложения"""
 
-    # Обработка текста
-    text_processing: Dict[str, Any] = None
-
-    # Модель Doc2Vec
-    doc2vec: Dict[str, Any] = None
-
-    # Поиск
-    search: Dict[str, Any] = None
-
-    # GUI
-    gui: Dict[str, Any] = None
-
-    # Суммаризация
-    summarization: Dict[str, Any] = None
-
-    # Производительность
-    performance: Dict[str, Any] = None
+    text_processing: Optional[Dict[str, Any]] = None
+    doc2vec: Optional[Dict[str, Any]] = None
+    search: Optional[Dict[str, Any]] = None
+    gui: Optional[Dict[str, Any]] = None
+    summarization: Optional[Dict[str, Any]] = None
+    performance: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if self.text_processing is None:
             self.text_processing = {
                 "min_text_length": 100,
-                "max_text_length": 500000,  # Увеличено до 500KB
+                "max_text_length": 500000,
                 "min_tokens_count": 10,
                 "min_token_length": 2,
                 "remove_stop_words": True,
                 "lemmatize": True,
                 "max_file_size_mb": 50,
-                "chunk_size": 10000,  # Для больших файлов
+                "chunk_size": 10000,
             }
 
         if self.doc2vec is None:
@@ -66,9 +68,9 @@ class AppConfig:
                 "epochs": 40,
                 "workers": max(1, multiprocessing.cpu_count() - 1),
                 "seed": 42,
-                "dm": 1,  # Distributed Memory
+                "dm": 1,
                 "negative": 5,
-                "hs": 0,  # Hierarchical Softmax
+                "hs": 0,
                 "sample": 1e-4,
             }
 
@@ -106,8 +108,8 @@ class AppConfig:
             self.performance = {
                 "enable_monitoring": True,
                 "log_slow_operations": True,
-                "slow_operation_threshold": 5.0,  # секунды
-                "memory_warning_threshold": 80,  # процент
+                "slow_operation_threshold": 5.0,
+                "memory_warning_threshold": 80,
                 "enable_profiling": False,
             }
 
@@ -117,72 +119,58 @@ class ConfigManager:
 
     def __init__(self, config_file: Optional[Path] = None):
         self.config_file = config_file or (CONFIG_DIR / "app_config.json")
-        self._config = None
+        self._config: Optional[AppConfig] = None
 
     @property
     def config(self) -> AppConfig:
-        """Получение конфигурации с ленивой загрузкой"""
         if self._config is None:
             self._config = self.load_config()
         return self._config
 
     def load_config(self) -> AppConfig:
-        """Загрузка конфигурации из файла"""
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
-
                 logger.info(f"Конфигурация загружена из {self.config_file}")
                 return AppConfig(**config_data)
-
             except Exception as e:
                 logger.warning(
                     f"Ошибка загрузки конфигурации: {e}. Используется конфигурация по умолчанию"
                 )
 
-        # Создаем конфигурацию по умолчанию
         default_config = AppConfig()
         self.save_config(default_config)
         return default_config
 
     def save_config(self, config: AppConfig) -> bool:
-        """Сохранение конфигурации в файл"""
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(asdict(config), f, indent=2, ensure_ascii=False)
-
             logger.info(f"Конфигурация сохранена в {self.config_file}")
             return True
-
         except Exception as e:
             logger.error(f"Ошибка сохранения конфигурации: {e}")
             return False
 
     def update_config(self, **kwargs) -> bool:
-        """Обновление конфигурации"""
         try:
             config_dict = asdict(self.config)
-
             for key, value in kwargs.items():
                 if key in config_dict:
                     if isinstance(config_dict[key], dict) and isinstance(value, dict):
                         config_dict[key].update(value)
                     else:
                         config_dict[key] = value
-
             self._config = AppConfig(**config_dict)
             return self.save_config(self._config)
-
         except Exception as e:
             logger.error(f"Ошибка обновления конфигурации: {e}")
             return False
 
 
-# Глобальный менеджер конфигурации
 config_manager = ConfigManager()
 
-# Экспортируем для обратной совместимости
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt"}
 SPACY_MODEL = "ru_core_news_sm"
 TEXT_PROCESSING_CONFIG = config_manager.config.text_processing

@@ -1,269 +1,87 @@
-"""Модуль для суммаризации текстов"""
+"""Модуль для экстрактивной суммаризации текста с использованием Doc2Vec"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Tuple
-
-if TYPE_CHECKING:
-    from gensim.models.doc2vec import Doc2Vec
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 from loguru import logger
 
 from semantic_search.config import SUMMARIZATION_CONFIG
+from semantic_search.utils.file_utils import FileExtractor
 from semantic_search.utils.text_utils import TextProcessor
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
 
     SKLEARN_AVAILABLE = True
 except ImportError:
-    logger.warning("scikit-learn не установлен. Суммаризация будет недоступна")
     SKLEARN_AVAILABLE = False
+    logger.warning("scikit-learn не установлен. Суммаризация будет недоступна")
+
+
+def requires_sklearn(func):
+    def wrapper(*args, **kwargs):
+        if not SKLEARN_AVAILABLE:
+            raise ImportError(
+                "Для суммаризации требуется scikit-learn. Установите: pip install scikit-learn"
+            )
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 class TextSummarizer:
-    """Класс для экстрактивной суммаризации текстов"""
+    """Класс для экстрактивной суммаризации текста"""
 
-    def __init__(self, doc2vec_model: Optional[Doc2Vec] = None):
+    def __init__(
+        self, doc2vec_model: Optional[Doc2Vec] = None, config: Optional[dict] = None
+    ):
         self.model = doc2vec_model
+        self.config = config or SUMMARIZATION_CONFIG
         self.text_processor = TextProcessor()
-        self.config = SUMMARIZATION_CONFIG
 
-    def set_model(self, model: Doc2Vec):
-        """Установка модели Doc2Vec"""
+    def set_model(self, model: Doc2Vec) -> None:
         self.model = model
-        logger.info("Модель для суммаризации установлена")
+        logger.info("Модель Doc2Vec установлена")
 
-    def _sentence_to_vector(self, sentence_tokens: List[str]) -> Optional[np.ndarray]:
-        """
-        Преобразование предложения в вектор
+    @requires_sklearn
+    def summarize(self, text: str, num_sentences: int = 3) -> List[str]:
+        """Возвращает список наиболее репрезентативных предложений"""
+        if not self.model:
+            raise ValueError("Модель Doc2Vec не установлена")
 
-        Args:
-            sentence_tokens: Токены предложения
-
-        Returns:
-            Векторное представление предложения
-        """
-        if self.model is None or not sentence_tokens:
-            return None
-
-        try:
-            # Используем infer_vector для получения вектора предложения
-            vector = self.model.infer_vector(sentence_tokens)
-            return vector
-        except Exception as e:
-            logger.error(f"Ошибка при векторизации предложения: {e}")
-            return None
-
-    def _calculate_sentence_scores(
-        self, sentences: List[str]
-    ) -> List[Tuple[str, float]]:
-        """
-        Вычисление оценок важности предложений методом TextRank
-
-        Args:
-            sentences: Список предложений
-
-        Returns:
-            Список кортежей (предложение, оценка)
-        """
-        if not SKLEARN_AVAILABLE or self.model is None:
-            # Fallback: простая оценка по длине предложения
-            scored_sentences = []
-            for sent in sentences:
-                score = len(sent.split())  # Простая оценка по количеству слов
-                scored_sentences.append((sent, float(score)))
-            return scored_sentences
-
-        # Получаем векторы для всех предложений
-        sentence_vectors = []
-        valid_sentences = []
-
-        for sentence in sentences:
-            tokens = self.text_processor.preprocess_text(sentence)
-            if tokens:  # Проверяем, что есть значимые токены
-                vector = self._sentence_to_vector(tokens)
-                if vector is not None:
-                    sentence_vectors.append(vector)
-                    valid_sentences.append(sentence)
-
-        if len(sentence_vectors) < 2:
-            # Недостаточно предложений для анализа
-            return [(sent, 1.0) for sent in valid_sentences]
-
-        try:
-            # Вычисляем матрицу схожести
-            similarity_matrix = cosine_similarity(sentence_vectors)
-
-            # Применяем простой алгоритм PageRank
-            scores = self._pagerank_algorithm(similarity_matrix)
-
-            # Сопоставляем оценки с предложениями
-            scored_sentences = list(zip(valid_sentences, scores))
-
-            return scored_sentences
-
-        except Exception as e:
-            logger.error(f"Ошибка при вычислении оценок предложений: {e}")
-            # Fallback к простой оценке
-            return [(sent, 1.0) for sent in valid_sentences]
-
-    def _pagerank_algorithm(
-        self, similarity_matrix: np.ndarray, damping: float = 0.85, max_iter: int = 100
-    ) -> List[float]:
-        """
-        Упрощенный алгоритм PageRank для ранжирования предложений
-
-        Args:
-            similarity_matrix: Матрица схожести предложений
-            damping: Коэффициент затухания
-            max_iter: Максимальное количество итераций
-
-        Returns:
-            Список оценок для каждого предложения
-        """
-        n = similarity_matrix.shape[0]
-
-        # Инициализация: равные веса для всех предложений
-        scores = np.ones(n) / n
-
-        # Создаем переходную матрицу
-        # Заменяем нули на маленькое значение, чтобы избежать деления на ноль
-        similarity_matrix = np.where(similarity_matrix == 0, 1e-8, similarity_matrix)
-
-        # Нормализуем строки матрицы
-        row_sums = similarity_matrix.sum(axis=1)
-        transition_matrix = similarity_matrix / row_sums[:, np.newaxis]
-
-        # Итеративный алгоритм PageRank
-        for _ in range(max_iter):
-            new_scores = (1 - damping) / n + damping * np.dot(
-                transition_matrix.T, scores
-            )
-
-            # Проверяем сходимость
-            if np.allclose(scores, new_scores, atol=1e-6):
-                break
-
-            scores = new_scores
-
-        return scores.tolist()
-
-    def summarize_text(
-        self,
-        text: str,
-        sentences_count: Optional[int] = None,
-        min_sentence_length: Optional[int] = None,
-    ) -> List[str]:
-        """
-        Создание экстрактивной выжимки текста
-
-        Args:
-            text: Исходный текст
-            sentences_count: Количество предложений в выжимке
-            min_sentence_length: Минимальная длина предложения
-
-        Returns:
-            Список предложений выжимки
-        """
-        if not text.strip():
-            logger.warning("Пустой текст для суммаризации")
-            return []
-
-        sentences_count = sentences_count or self.config["default_sentences_count"]
-        min_sentence_length = min_sentence_length or self.config["min_sentence_length"]
-
-        logger.info(
-            f"Начинаем суммаризацию текста (цель: {sentences_count} предложений)"
-        )
-
-        # Разбиваем текст на предложения
-        sentences = self.text_processor.split_into_sentences(text)
-
-        if not sentences:
-            logger.warning("Не удалось разбить текст на предложения")
-            return []
-
-        if len(sentences) <= sentences_count:
-            logger.info("Количество предложений меньше или равно требуемому")
+        sentences = self.text_processor.split_sentences(text)
+        if len(sentences) <= num_sentences:
             return sentences
 
-        # Вычисляем оценки важности предложений
-        scored_sentences = self._calculate_sentence_scores(sentences)
+        sentence_vectors = [
+            self.model.infer_vector(self.text_processor.preprocess_text(s))
+            for s in sentences
+        ]
+        doc_vector = np.mean(sentence_vectors, axis=0).reshape(1, -1)
+        sent_matrix = np.stack(sentence_vectors)
+        similarities = cosine_similarity(sent_matrix, doc_vector).flatten()
 
-        # Сортируем по оценке (убывание)
-        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+        top_indices = similarities.argsort()[-num_sentences:][::-1]
+        summary = [sentences[i] for i in sorted(top_indices)]
 
-        # Берем топ-N предложений
-        top_sentences = scored_sentences[:sentences_count]
+        return summary
 
-        # Восстанавливаем исходный порядок предложений
-        original_sentences = sentences
-        summary_sentences = []
+    def summarize_file(self, file_path: str) -> List[str]:
+        extractor = FileExtractor()
+        text = extractor.extract_text(Path(file_path))
+        return self.summarize(text)
 
-        for original_sent in original_sentences:
-            for summary_sent, score in top_sentences:
-                if original_sent == summary_sent:
-                    summary_sentences.append(original_sent)
-                    break
-
-        logger.info(f"Создана выжимка из {len(summary_sentences)} предложений")
-        return summary_sentences
-
-    def summarize_file(self, file_path: str, **kwargs) -> List[str]:
-        """
-        Суммаризация файла
-
-        Args:
-            file_path: Путь к файлу
-            **kwargs: Дополнительные параметры для summarize_text
-
-        Returns:
-            Список предложений выжимки
-        """
-        from semantic_search.utils.file_utils import FileExtractor
-
-        try:
-            extractor = FileExtractor()
-            text = extractor.extract_text(Path(file_path))
-
-            if not text:
-                logger.error(f"Не удалось извлечь текст из файла: {file_path}")
-                return []
-
-            return self.summarize_text(text, **kwargs)
-
-        except Exception as e:
-            logger.error(f"Ошибка при суммаризации файла {file_path}: {e}")
-            return []
-
-    def get_summary_statistics(self, original_text: str, summary: List[str]) -> dict:
-        """
-        Получение статистики суммаризации
-
-        Args:
-            original_text: Исходный текст
-            summary: Выжимка
-
-        Returns:
-            Словарь со статистикой
-        """
-        original_sentences = self.text_processor.split_into_sentences(original_text)
-
-        stats = {
-            "original_sentences_count": len(original_sentences),
-            "summary_sentences_count": len(summary),
-            "compression_ratio": len(summary) / len(original_sentences)
-            if original_sentences
-            else 0,
-            "original_chars_count": len(original_text),
-            "summary_chars_count": sum(len(sent) for sent in summary),
-            "chars_compression_ratio": sum(len(sent) for sent in summary)
-            / len(original_text)
-            if original_text
-            else 0,
-        }
-
-        return stats
+    def summarize_folder(self, folder_path: str) -> List[str]:
+        extractor = FileExtractor()
+        results = []
+        for path in extractor.find_documents(Path(folder_path)):
+            text = extractor.extract_text(path)
+            summary = self.summarize(text)
+            results.append(f"{path.name}:\n" + "\n".join(summary))
+        return results

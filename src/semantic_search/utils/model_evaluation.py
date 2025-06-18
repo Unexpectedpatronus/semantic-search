@@ -1,96 +1,56 @@
-"""Оценка качества модели"""
+"""Оценка когерентности модели Doc2Vec"""
 
-from typing import Dict, List
+import random
+from typing import Dict, List, Tuple
 
 import numpy as np
 from loguru import logger
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
 
 
 class ModelEvaluator:
-    """Оценка качества обученной модели"""
+    """Класс для оценки качества семантической модели"""
 
-    def __init__(self, model, corpus_info):
+    def __init__(self, model, corpus_info: List[Tuple[List[str], str, dict]]):
         self.model = model
         self.corpus_info = corpus_info
 
     def evaluate_coherence(self, sample_size: int = 100) -> Dict[str, float]:
-        """Оценка когерентности модели"""
-        if len(self.corpus_info) < sample_size:
-            sample_size = len(self.corpus_info)
+        """
+        Рассчитывает среднюю когерентность модели по выборке документов.
 
-        # Случайная выборка документов
-        import random
+        Returns:
+            Словарь с метриками когерентности
+        """
+        if len(self.corpus_info) == 0:
+            logger.warning("Корпус пуст. Оценка невозможна.")
+            return {"coherence": 0.0, "samples_used": 0}
 
+        sample_size = min(sample_size, len(self.corpus_info))
         sample_docs = random.sample(self.corpus_info, sample_size)
 
-        coherence_scores = []
-        similarity_scores = []
+        scores = []
 
-        for tokens, doc_id, metadata in sample_docs:
+        for tokens, doc_id, _ in sample_docs:
+            if not tokens:
+                continue
             try:
-                # Получаем вектор документа
-                doc_vector = self.model.dv[doc_id]
+                doc_vector = self.model.dv[doc_id].reshape(1, -1)
+                token_vectors = np.array(
+                    [self.model.wv[token] for token in tokens if token in self.model.wv]
+                )
 
-                # Вычисляем средний вектор слов документа
-                word_vectors = []
-                for token in tokens[:50]:  # Берем первые 50 токенов
-                    if token in self.model.wv:
-                        word_vectors.append(self.model.wv[token])
+                if token_vectors.size == 0:
+                    continue
 
-                if len(word_vectors) > 0:
-                    avg_word_vector = np.mean(word_vectors, axis=0)
-
-                    # Косинусное сходство между вектором документа и средним вектором слов
-                    similarity = cosine_similarity([doc_vector], [avg_word_vector])[0][
-                        0
-                    ]
-                    coherence_scores.append(similarity)
+                mean_vector = token_vectors.mean(axis=0).reshape(1, -1)
+                similarity = cosine_similarity(doc_vector, mean_vector)[0][0]
+                scores.append(similarity)
 
             except Exception as e:
-                logger.debug(f"Ошибка при оценке документа {doc_id}: {e}")
-                continue
+                logger.warning(f"Ошибка при вычислении когерентности для {doc_id}: {e}")
 
-        return {
-            "mean_coherence": np.mean(coherence_scores) if coherence_scores else 0.0,
-            "std_coherence": np.std(coherence_scores) if coherence_scores else 0.0,
-            "evaluated_docs": len(coherence_scores),
-        }
+        if not scores:
+            return {"coherence": 0.0, "samples_used": 0}
 
-    def evaluate_vocabulary_coverage(self) -> Dict[str, float]:
-        """Оценка покрытия словаря"""
-        total_tokens = 0
-        covered_tokens = 0
-
-        for tokens, doc_id, metadata in self.corpus_info:
-            for token in tokens:
-                total_tokens += 1
-                if token in self.model.wv:
-                    covered_tokens += 1
-
-        coverage = covered_tokens / total_tokens if total_tokens > 0 else 0.0
-
-        return {
-            "vocabulary_coverage": coverage,
-            "total_tokens": total_tokens,
-            "covered_tokens": covered_tokens,
-            "vocabulary_size": len(self.model.wv.key_to_index),
-        }
-
-    def find_outlier_documents(self, threshold: float = 0.1) -> List[str]:
-        """Поиск документов-выбросов"""
-        outliers = []
-
-        for tokens, doc_id, metadata in self.corpus_info:
-            try:
-                # Ищем похожие документы
-                similar = self.model.dv.most_similar(doc_id, topn=5)
-
-                # Если максимальная схожесть очень низкая - возможный выброс
-                if similar and similar[0][1] < threshold:
-                    outliers.append(doc_id)
-
-            except Exception:
-                continue
-
-        return outliers
+        return {"coherence": float(np.mean(scores)), "samples_used": len(scores)}
