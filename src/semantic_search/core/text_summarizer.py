@@ -176,10 +176,16 @@ class TextSummarizer:
         min_sentence_length = min_sentence_length or self.config["min_sentence_length"]
 
         logger.info(
-            f"Начинаем суммаризацию текста (цель: {sentences_count} предложений)"
+            f"Начинаем суммаризацию текста длиной {len(text)} символов (цель: {sentences_count} предложений)"
         )
 
-        # Разбиваем текст на предложения
+        # Для очень длинных текстов используем упрощенный подход
+        if len(text) > 1_000_000:
+            logger.warning(
+                f"Текст очень длинный ({len(text)} символов), используем упрощенный метод"
+            )
+            return self._summarize_long_text(text, sentences_count, min_sentence_length)
+
         sentences = self.text_processor.split_into_sentences(text)
 
         if not sentences:
@@ -211,6 +217,69 @@ class TextSummarizer:
 
         logger.info(f"Создана выжимка из {len(summary_sentences)} предложений")
         return summary_sentences
+
+    def _summarize_long_text(
+        self, text: str, sentences_count: int, min_sentence_length: int
+    ) -> List[str]:
+        """
+        Упрощенная суммаризация для очень длинных текстов
+
+        Args:
+            text: Исходный текст
+            sentences_count: Количество предложений
+            min_sentence_length: Минимальная длина предложения
+
+        Returns:
+            Список предложений выжимки
+        """
+        # Разбиваем текст на части по 500K символов
+        chunk_size = 500_000
+        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+        all_important_sentences = []
+
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Обработка части {i + 1}/{len(chunks)}")
+
+            chunk_sentences = self.text_processor.split_into_sentences(chunk)
+
+            if not chunk_sentences:
+                continue
+
+            # Для каждого чанка выбираем пропорциональное количество предложений
+            chunk_sentence_count = max(1, sentences_count // len(chunks))
+            if i == 0:  # Первый чанк может содержать больше важной информации
+                chunk_sentence_count = max(2, chunk_sentence_count)
+
+            # Простая эвристика: берем первые и последние предложения + самые длинные
+            important_sentences = []
+
+            # Первое предложение чанка
+            if chunk_sentences:
+                important_sentences.append(chunk_sentences[0])
+
+            # Последнее предложение чанка
+            if len(chunk_sentences) > 1:
+                important_sentences.append(chunk_sentences[-1])
+
+            # Самые длинные предложения (обычно более информативные)
+            if len(chunk_sentences) > 2:
+                sorted_by_length = sorted(chunk_sentences[1:-1], key=len, reverse=True)
+                remaining_count = chunk_sentence_count - len(important_sentences)
+                important_sentences.extend(sorted_by_length[:remaining_count])
+
+            all_important_sentences.extend(important_sentences[:chunk_sentence_count])
+
+        # Удаляем дубликаты, сохраняя порядок
+        seen = set()
+        unique_sentences = []
+        for sent in all_important_sentences:
+            if sent not in seen:
+                seen.add(sent)
+                unique_sentences.append(sent)
+
+        # Возвращаем требуемое количество предложений
+        return unique_sentences[:sentences_count]
 
     def summarize_file(self, file_path: str, **kwargs) -> List[str]:
         """

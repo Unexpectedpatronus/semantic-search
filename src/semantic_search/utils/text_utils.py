@@ -29,6 +29,8 @@ def _initialize_spacy():
         # Попытка загрузки русской модели
         try:
             _nlp = spacy.load(SPACY_MODEL)
+            # Увеличиваем лимит для длинных текстов
+            _nlp.max_length = 3_000_000  # 3 миллиона символов
             _spacy_available = True
             logger.info(f"SpaCy модель {SPACY_MODEL} загружена")
         except OSError:
@@ -36,6 +38,7 @@ def _initialize_spacy():
                 f"SpaCy модель {SPACY_MODEL} не найдена. Используется базовая обработка"
             )
             _nlp = Russian()
+            _nlp.max_length = 3_000_000
             _spacy_available = False
 
     except ImportError:
@@ -60,7 +63,6 @@ def check_spacy_model_availability() -> dict:
         "model_path": None,
         "error": None,
     }
-
     try:
         import spacy
 
@@ -88,6 +90,7 @@ class TextProcessor:
         self.config = TEXT_PROCESSING_CONFIG
         self._nlp = None
         self._spacy_available = None
+        self.max_chunk_size = 800_000
 
     def _get_nlp(self):
         """Получить SpaCy модель (с ленивой загрузкой)"""
@@ -121,13 +124,10 @@ class TextProcessor:
         if not text:
             return ""
 
-        # Удаляем специальные символы (оставляем буквы, цифры, знаки препинания)
         text = re.sub(r'[^\w\s\-.,!?;:()\[\]""«»]+', " ", text, flags=re.UNICODE)
 
-        # Удаляем лишние пробелы и переносы строк
         text = re.sub(r"\s+", " ", text)
 
-        # Удаляем слишком короткие "слова" (вероятно, мусор)
         words = text.split()
         words = [word for word in words if len(word) > 1]
 
@@ -145,10 +145,8 @@ class TextProcessor:
         """
         text = text.lower()
 
-        # Простая токенизация по пробелам
         tokens = text.split()
 
-        # Базовая фильтрация
         tokens = [
             token
             for token in tokens
@@ -172,6 +170,25 @@ class TextProcessor:
         if not nlp:
             return self.preprocess_basic(text)
 
+        # Для очень длинных текстов обрабатываем по частям
+        if len(text) > self.max_chunk_size:
+            logger.info(
+                f"Текст слишком длинный ({len(text)} символов), обрабатываем по частям"
+            )
+            tokens = []
+
+            # Разбиваем текст на чанки
+            for i in range(0, len(text), self.max_chunk_size):
+                chunk = text[i : i + self.max_chunk_size]
+                chunk_tokens = self._process_spacy_chunk(chunk, nlp, spacy_available)
+                tokens.extend(chunk_tokens)
+
+            return tokens
+        else:
+            return self._process_spacy_chunk(text, nlp, spacy_available)
+
+    def _process_spacy_chunk(self, text: str, nlp, spacy_available: bool) -> List[str]:
+        """Обработка одного чанка текста через SpaCy"""
         doc = nlp(text)
         tokens = []
 
@@ -203,13 +220,11 @@ class TextProcessor:
         if not text:
             return []
 
-        # Базовая очистка
         cleaned_text = self.clean_text(text)
 
         if not cleaned_text:
             return []
 
-        # Проверяем доступность SpaCy при первом использовании
         _, spacy_available = self._get_nlp()
 
         if spacy_available:
@@ -238,18 +253,37 @@ class TextProcessor:
         min_sentence_length = self.config.get("min_sentence_length", 10)
 
         if spacy_available and nlp:
-            # Используем SpaCy для точного разбиения
-            doc = nlp(text)
-            sentences = [sent.text.strip() for sent in doc.sents]
-            # Фильтруем слишком короткие предложения
-            sentences = [sent for sent in sentences if len(sent) >= min_sentence_length]
-            return sentences
+            # Для длинных текстов используем упрощенный метод
+            if len(text) > self.max_chunk_size:
+                logger.info("Используем упрощенное разбиение для длинного текста")
+                return self._split_sentences_basic(text, min_sentence_length)
+
+            try:
+                # Используем SpaCy для точного разбиения
+                doc = nlp(text)
+                sentences = [sent.text.strip() for sent in doc.sents]
+                # Фильтруем слишком короткие предложения
+                sentences = [
+                    sent for sent in sentences if len(sent) >= min_sentence_length
+                ]
+                return sentences
+            except Exception as e:
+                logger.warning(f"Ошибка при разбиении через SpaCy: {e}")
+                return self._split_sentences_basic(text, min_sentence_length)
         else:
-            # Базовое разбиение по точкам
-            sentences = re.split(r"[.!?]+", text)
-            sentences = [
-                sent.strip()
-                for sent in sentences
-                if sent.strip() and len(sent.strip()) >= min_sentence_length
-            ]
-            return sentences
+            return self._split_sentences_basic(text, min_sentence_length)
+
+    def _split_sentences_basic(self, text: str, min_length: int) -> List[str]:
+        """Базовое разбиение текста на предложения"""
+
+        sentences = re.split(r"[.!?]+(?:\s+|$)", text)
+
+        result = []
+        for sent in sentences:
+            sent = sent.strip()
+            if sent and len(sent) >= min_length:
+                if sent[-1] not in ".!?":
+                    sent += "."
+                result.append(sent)
+
+        return result

@@ -7,6 +7,7 @@ from loguru import logger
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -821,49 +822,97 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Ошибка", "Не удалось извлечь текст из файла")
                 return
 
-            # Показываем оригинальный текст
-            self.original_text.setPlainText(
-                text[:5000]
-            )  # Показываем первые 5000 символов
+            # Проверяем размер текста
+            text_length = len(text)
+            logger.info(f"Загружен текст длиной {text_length} символов")
+
+            # Предупреждение для очень больших файлов
+            if text_length > 2_000_000:
+                reply = QMessageBox.question(
+                    self,
+                    "Большой файл",
+                    f"Файл содержит {text_length:,} символов.\n"
+                    "Обработка может занять несколько минут.\n"
+                    "Продолжить?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+
+            # Показываем оригинальный текст (ограничиваем превью)
+            preview_length = min(5000, text_length)
+            preview = text[:preview_length]
+            if text_length > preview_length:
+                preview += f"\n\n... (показаны первые {preview_length:,} из {text_length:,} символов) ..."
+            self.original_text.setPlainText(preview)
 
             # Создаем выжимку
-            self.status_bar.showMessage("Создание выжимки...")
+            self.status_bar.showMessage(
+                "Создание выжимки... Это может занять время для больших файлов"
+            )
+            QApplication.processEvents()  # Обновляем UI
+
             sentences_count = self.sentences_spin.value()
 
-            summary = self.summarizer.summarize_text(
-                text, sentences_count=sentences_count
-            )
+            # Используем QTimer для асинхронной обработки
+            self.summarize_button.setEnabled(False)
 
-            if summary:
-                # Показываем выжимку
-                summary_text = "\n\n".join(
-                    f"{i}. {sent}" for i, sent in enumerate(summary, 1)
+            try:
+                summary = self.summarizer.summarize_text(
+                    text, sentences_count=sentences_count
                 )
-                self.summary_text.setPlainText(summary_text)
 
-                # Показываем статистику
-                stats = self.summarizer.get_summary_statistics(text, summary)
-                stats_text = "\n\n--- Статистика ---\n"
-                stats_text += (
-                    f"Исходных предложений: {stats['original_sentences_count']}\n"
-                )
-                stats_text += (
-                    f"Предложений в выжимке: {stats['summary_sentences_count']}\n"
-                )
-                stats_text += f"Сжатие: {stats['compression_ratio']:.1%}\n"
-                stats_text += f"Исходных символов: {stats['original_chars_count']:,}\n"
-                stats_text += f"Символов в выжимке: {stats['summary_chars_count']:,}\n"
+                if summary:
+                    # Показываем выжимку
+                    summary_text = "\n\n".join(
+                        f"{i}. {sent}" for i, sent in enumerate(summary, 1)
+                    )
+                    self.summary_text.setPlainText(summary_text)
 
-                self.summary_text.append(stats_text)
-                self.status_bar.showMessage("Выжимка создана")
-            else:
-                QMessageBox.warning(self, "Ошибка", "Не удалось создать выжимку")
+                    # Показываем статистику
+                    stats = self.summarizer.get_summary_statistics(text, summary)
+                    stats_text = "\n\n--- Статистика ---\n"
+                    stats_text += (
+                        f"Исходных предложений: {stats['original_sentences_count']}\n"
+                    )
+                    stats_text += (
+                        f"Предложений в выжимке: {stats['summary_sentences_count']}\n"
+                    )
+                    stats_text += f"Сжатие: {stats['compression_ratio']:.1%}\n"
+                    stats_text += (
+                        f"Исходных символов: {stats['original_chars_count']:,}\n"
+                    )
+                    stats_text += (
+                        f"Символов в выжимке: {stats['summary_chars_count']:,}\n"
+                    )
+
+                    self.summary_text.append(stats_text)
+                    self.status_bar.showMessage("Выжимка создана")
+                else:
+                    QMessageBox.warning(self, "Ошибка", "Не удалось создать выжимку")
+                    self.status_bar.showMessage("Ошибка создания выжимки")
+
+            finally:
+                self.summarize_button.setEnabled(True)
 
         except Exception as e:
             logger.error(f"Ошибка при создании выжимки: {e}")
-            QMessageBox.critical(
-                self, "Ошибка", f"Ошибка при создании выжимки: {str(e)}"
-            )
+            self.summarize_button.setEnabled(True)
+
+            # Специальная обработка ошибки SpaCy
+            if "exceeds maximum" in str(e):
+                QMessageBox.critical(
+                    self,
+                    "Ошибка",
+                    "Файл слишком большой для обработки.\n"
+                    "Попробуйте файл меньшего размера или разделите его на части.",
+                )
+            else:
+                QMessageBox.critical(
+                    self, "Ошибка", f"Ошибка при создании выжимки: {str(e)}"
+                )
+
+            self.status_bar.showMessage("Ошибка")
 
     def update_statistics(self):
         """Обновление статистики"""

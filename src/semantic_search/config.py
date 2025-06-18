@@ -49,14 +49,15 @@ class AppConfig:
         if not self.text_processing:
             self.text_processing = {
                 "min_text_length": 100,
-                "max_text_length": 500000,  # Увеличено до 500KB
+                "max_text_length": 5_000_000,
                 "min_tokens_count": 10,
                 "min_token_length": 2,
                 "min_sentence_length": 10,
                 "remove_stop_words": True,
                 "lemmatize": True,
-                "max_file_size_mb": 50,
+                "max_file_size_mb": 100,
                 "chunk_size": 10000,  # Для больших файлов
+                "spacy_max_length": 3_000_000,  # Лимит SpaCy
             }
 
         if not self.doc2vec:
@@ -184,7 +185,7 @@ class ConfigManager:
 config_manager = ConfigManager()
 
 # Экспортируем для обратной совместимости
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc"}
 SPACY_MODEL = "ru_core_news_sm"
 TEXT_PROCESSING_CONFIG = config_manager.config.text_processing
 DOC2VEC_CONFIG = config_manager.config.doc2vec
