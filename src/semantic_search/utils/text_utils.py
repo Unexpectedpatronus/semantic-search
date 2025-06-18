@@ -221,7 +221,7 @@ class TextProcessor:
 
         return tokens
 
-    def split_into_sentences(self, text: str) -> list[str]:
+    def split_into_sentences(self, text: str) -> List[str]:
         """
         Разбиение текста на предложения
 
@@ -233,17 +233,16 @@ class TextProcessor:
         """
         if not text:
             return []
+
         nlp, spacy_available = self._get_nlp()
+        min_sentence_length = self.config.get("min_sentence_length", 10)
+
         if spacy_available and nlp:
             # Используем SpaCy для точного разбиения
             doc = nlp(text)
             sentences = [sent.text.strip() for sent in doc.sents]
             # Фильтруем слишком короткие предложения
-            sentences = [
-                sent
-                for sent in sentences
-                if len(sent) >= self.config.get("min_sentence_length", 10)
-            ]
+            sentences = [sent for sent in sentences if len(sent) >= min_sentence_length]
             return sentences
         else:
             # Базовое разбиение по точкам
@@ -251,6 +250,6 @@ class TextProcessor:
             sentences = [
                 sent.strip()
                 for sent in sentences
-                if sent.strip() and len(sent.strip()) >= 10
+                if sent.strip() and len(sent.strip()) >= min_sentence_length
             ]
             return sentences

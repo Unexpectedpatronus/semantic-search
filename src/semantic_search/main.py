@@ -51,7 +51,22 @@ def main():
             )
 
         # Проверяем доступность PyQt6
-        from PyQt6.QtWidgets import QApplication
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            from semantic_search.gui.main_window import MainWindow
+        except ImportError as e:
+            logger.error(f"PyQt6 не установлен: {e}")
+            notification_manager.error(
+                "Ошибка импорта",
+                "PyQt6 не установлен",
+                "Установите зависимости: poetry install",
+            )
+            print("\n❌ PyQt6 не установлен!")
+            print("Установите зависимости командой: poetry install")
+            print("\nВы можете использовать CLI режим:")
+            print("poetry run semantic-search-cli --help")
+            sys.exit(1)
 
         # Создание приложения Qt
         app = QApplication(sys.argv)
@@ -62,8 +77,6 @@ def main():
         app.setStyle("Fusion")  # Современный стиль
 
         # Создание и отображение главного окна
-        from semantic_search.gui.main_window import MainWindow
-
         main_window = MainWindow()
         main_window.show()
 
@@ -78,7 +91,10 @@ def main():
         notification_manager.error(
             "Критическая ошибка", "Ошибка при запуске приложения", str(e)
         )
-        raise
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        print(f"\n❌ Критическая ошибка: {e}")
+        print("\nПроверьте логи для деталей")
+        sys.exit(1)
     finally:
         notification_manager.stop()
         task_manager.shutdown()

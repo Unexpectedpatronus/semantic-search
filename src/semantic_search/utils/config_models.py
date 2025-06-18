@@ -1,6 +1,6 @@
 """Модели конфигурации"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Set
 
 
@@ -14,11 +14,9 @@ class ProcessingConfig:
     min_token_length: int = 2
     remove_stop_words: bool = True
     lemmatize: bool = True
-    supported_extensions: Set[str] = None
-
-    def __post_init__(self):
-        if self.supported_extensions is None:
-            self.supported_extensions = {".pdf", ".docx", ".doc"}
+    supported_extensions: Set[str] = field(
+        default_factory=lambda: {".pdf", ".docx", ".doc"}
+    )
 
 
 @dataclass

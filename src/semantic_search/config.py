@@ -2,7 +2,7 @@
 
 import json
 import multiprocessing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,37 +28,38 @@ class AppConfig:
     """Главная конфигурация приложения"""
 
     # Обработка текста
-    text_processing: Dict[str, Any] = None
+    text_processing: Dict[str, Any] = field(default_factory=dict)
 
     # Модель Doc2Vec
-    doc2vec: Dict[str, Any] = None
+    doc2vec: Dict[str, Any] = field(default_factory=dict)
 
     # Поиск
-    search: Dict[str, Any] = None
+    search: Dict[str, Any] = field(default_factory=dict)
 
     # GUI
-    gui: Dict[str, Any] = None
+    gui: Dict[str, Any] = field(default_factory=dict)
 
     # Суммаризация
-    summarization: Dict[str, Any] = None
+    summarization: Dict[str, Any] = field(default_factory=dict)
 
     # Производительность
-    performance: Dict[str, Any] = None
+    performance: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.text_processing is None:
+        if not self.text_processing:
             self.text_processing = {
                 "min_text_length": 100,
                 "max_text_length": 500000,  # Увеличено до 500KB
                 "min_tokens_count": 10,
                 "min_token_length": 2,
+                "min_sentence_length": 10,
                 "remove_stop_words": True,
                 "lemmatize": True,
                 "max_file_size_mb": 50,
                 "chunk_size": 10000,  # Для больших файлов
             }
 
-        if self.doc2vec is None:
+        if not self.doc2vec:
             self.doc2vec = {
                 "vector_size": 150,
                 "window": 10,
@@ -72,7 +73,7 @@ class AppConfig:
                 "sample": 1e-4,
             }
 
-        if self.search is None:
+        if not self.search:
             self.search = {
                 "default_top_k": 10,
                 "max_top_k": 100,
@@ -82,7 +83,7 @@ class AppConfig:
                 "enable_filtering": True,
             }
 
-        if self.gui is None:
+        if not self.gui:
             self.gui = {
                 "window_title": "Semantic Document Search",
                 "window_size": (1400, 900),
@@ -92,7 +93,7 @@ class AppConfig:
                 "auto_save_settings": True,
             }
 
-        if self.summarization is None:
+        if not self.summarization:
             self.summarization = {
                 "default_sentences_count": 5,
                 "max_sentences_count": 20,
@@ -102,7 +103,7 @@ class AppConfig:
                 "max_iterations": 100,
             }
 
-        if self.performance is None:
+        if not self.performance:
             self.performance = {
                 "enable_monitoring": True,
                 "log_slow_operations": True,

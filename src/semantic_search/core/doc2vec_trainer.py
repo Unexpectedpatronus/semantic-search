@@ -212,7 +212,14 @@ class Doc2VecTrainer:
             logger.error("Нет модели для сохранения")
             return False
 
+        # Проверяем, что имя модели не пустое
+        if not model_name or model_name.strip() == "":
+            logger.error("Имя модели не может быть пустым")
+            return False
+
         try:
+            if model_name.endswith(".model"):
+                model_name = model_name[:-6]
             model_path = MODELS_DIR / f"{model_name}.model"
             model_to_save.save(str(model_path))
 
@@ -244,7 +251,14 @@ class Doc2VecTrainer:
             logger.error("Gensim не доступен для загрузки модели")
             return None
 
+        if not model_name or model_name.strip() == "":
+            logger.error("Имя модели не может быть пустым")
+            return None
+
         try:
+            if model_name.endswith(".model"):
+                model_name = model_name[:-6]
+
             model_path = MODELS_DIR / f"{model_name}.model"
 
             if not model_path.exists():
@@ -257,9 +271,13 @@ class Doc2VecTrainer:
             # Загружаем информацию о корпусе если есть
             corpus_path = MODELS_DIR / f"{model_name}_corpus_info.pkl"
             if corpus_path.exists():
-                with open(corpus_path, "rb") as f:
-                    self.corpus_info = pickle.load(f)
-                logger.info("Информация о корпусе загружена")
+                try:
+                    with open(corpus_path, "rb") as f:
+                        self.corpus_info = pickle.load(f)
+                    logger.info("Информация о корпусе загружена")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить информацию о корпусе: {e}")
+                    self.corpus_info = []
 
             logger.info(f"Модель загружена: {model_path}")
             logger.info(f"Векторов документов: {len(model.dv)}")
