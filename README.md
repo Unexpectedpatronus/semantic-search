@@ -190,10 +190,8 @@ semantic-search/
 │       ├── main.py                      # Точка входа
 │       └── utils/                       # Вспомогательные модули
 │           ├── cache_manager.py
-│           ├── config_models.py
 │           ├── file_utils.py
 │           ├── logging_config.py
-│           ├── model_evaluation.py
 │           ├── notification_system.py
 │           ├── performance_monitor.py
 │           ├── statistics.py
