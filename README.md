@@ -280,7 +280,7 @@ poetry run python -m spacy download ru_core_news_sm --force
 
 **Evgeny Odintsov**
 - Email: ev1genial@gmail.com
-- GitHub: [@yourusername](https://github.com/yourusername)
+- GitHub: [@unexpectedpatronus](https://github.com/Unexpectedpatronus)
 
 ## 🙏 Благодарности
 
