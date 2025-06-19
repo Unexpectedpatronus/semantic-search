@@ -1,4 +1,4 @@
-"""Модуль поискового движка"""
+"""Модуль поискового движка (ИСПРАВЛЕННАЯ ВЕРСИЯ)"""
 
 from __future__ import annotations
 
@@ -64,14 +64,14 @@ class SemanticSearchEngine:
 
         logger.info("Поисковая модель установлена")
 
-    def search_old(
+    def _search_base(
         self,
         query: str,
         top_k: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
     ) -> List[SearchResult]:
         """
-        Основная функция поиска
+        Базовая функция поиска
 
         Args:
             query: Поисковый запрос
@@ -140,7 +140,7 @@ class SemanticSearchEngine:
         """Поиск с фильтрами"""
 
         # Базовый поиск
-        results = self.search_old(query, top_k=top_k or 100)
+        results = self._search_base(query, top_k=top_k or 100)
 
         # Применяем фильтры
         filtered_results = []
@@ -217,6 +217,7 @@ class SemanticSearchEngine:
                 min_file_size=min_file_size,
                 max_file_size=max_file_size,
             )
+
         # Генерируем стабильный ключ
         raw_key = self.make_cache_key(
             query, top_k, file_extensions, date_range, min_file_size, max_file_size
