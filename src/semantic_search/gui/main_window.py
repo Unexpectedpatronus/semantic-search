@@ -50,13 +50,21 @@ class TrainingThread(QThread):
     statistics = pyqtSignal(dict)
 
     def __init__(
-        self, documents_path: Path, model_name: str, vector_size: int, epochs: int
+        self,
+        documents_path: Path,
+        model_name: str,
+        vector_size: int,
+        epochs: int,
+        dm: int = 1,
+        negative: int = 5,
     ):
         super().__init__()
         self.documents_path = documents_path
         self.model_name = model_name
         self.vector_size = vector_size
         self.epochs = epochs
+        self.dm = dm
+        self.negative = negative
         self.is_cancelled = False
 
     def run(self):
@@ -397,6 +405,34 @@ class MainWindow(QMainWindow):
         epochs_layout.addWidget(self.epochs_spin)
         params_layout.addLayout(epochs_layout)
 
+        # Дополнительные параметры (расширенные)
+        advanced_group = QGroupBox("Расширенные параметры (необязательно)")
+        advanced_layout = QVBoxLayout()
+
+        # DM режим
+        dm_layout = QHBoxLayout()
+        dm_layout.addWidget(QLabel("Режим обучения:"))
+        self.dm_combo = QComboBox()
+        self.dm_combo.addItems(
+            ["Distributed Memory (DM)", "Distributed Bag of Words (DBOW)"]
+        )
+        self.dm_combo.setCurrentIndex(0)
+        dm_layout.addWidget(self.dm_combo)
+        advanced_layout.addLayout(dm_layout)
+
+        # Negative sampling
+        negative_layout = QHBoxLayout()
+        negative_layout.addWidget(QLabel("Negative sampling:"))
+        self.negative_spin = QSpinBox()
+        self.negative_spin.setMinimum(0)
+        self.negative_spin.setMaximum(20)
+        self.negative_spin.setValue(5)
+        negative_layout.addWidget(self.negative_spin)
+        advanced_layout.addLayout(negative_layout)
+
+        advanced_group.setLayout(advanced_layout)
+        layout.addWidget(advanced_group)
+
         params_group.setLayout(params_layout)
         layout.addWidget(params_group)
 
@@ -618,11 +654,15 @@ class MainWindow(QMainWindow):
         self.training_log.append("Начинаем обучение модели...\n")
 
         # Создаем и запускаем поток
+        dm_value = 1 if self.dm_combo.currentIndex() == 0 else 0
+
         self.training_thread = TrainingThread(
             documents_path,
             model_name,
             self.vector_size_spin.value(),
             self.epochs_spin.value(),
+            dm=dm_value,
+            negative=self.negative_spin.value(),
         )
 
         self.training_thread.progress.connect(self.on_training_progress)

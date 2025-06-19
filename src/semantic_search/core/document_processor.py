@@ -63,7 +63,11 @@ class DocumentProcessor:
 
             try:
                 file_size = file_path.stat().st_size
-                if file_size > 50 * 1024 * 1024:  # 50MB
+                max_file_size_bytes = (
+                    self.config.get("max_file_size_mb", 100) * 1024 * 1024
+                )
+
+                if file_size > max_file_size_bytes:
                     logger.warning(
                         f"Файл слишком большой ({file_size / 1024 / 1024:.1f}MB): {file_path}"
                     )
@@ -72,11 +76,14 @@ class DocumentProcessor:
 
                 raw_text = self.file_extractor.extract_text(file_path)
 
-                if len(raw_text) > self.config["max_text_length"]:
-                    raw_text = raw_text[: self.config["max_text_length"]]
+                # Используем актуальное значение из конфигурации
+                max_text_length = self.config.get("max_text_length", 5_000_000)
+
+                if len(raw_text) > max_text_length:
                     logger.info(
-                        f"Текст обрезан до {self.config['max_text_length']} символов"
+                        f"Текст обрезан с {len(raw_text):,} до {max_text_length:,} символов"
                     )
+                    raw_text = raw_text[:max_text_length]
 
                 if len(raw_text) < self.config["min_text_length"]:
                     logger.warning(

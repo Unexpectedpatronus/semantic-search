@@ -49,13 +49,13 @@ class AppConfig:
         if not self.text_processing:
             self.text_processing = {
                 "min_text_length": 100,
-                "max_text_length": 5_000_000,
+                "max_text_length": 5_000_000,  # Увеличено до 5MB
                 "min_tokens_count": 10,
                 "min_token_length": 2,
                 "min_sentence_length": 10,
                 "remove_stop_words": True,
                 "lemmatize": True,
-                "max_file_size_mb": 100,
+                "max_file_size_mb": 100,  # Увеличено до 100MB
                 "chunk_size": 10000,  # Для больших файлов
                 "spacy_max_length": 3_000_000,  # Лимит SpaCy
             }
@@ -159,7 +159,18 @@ class ConfigManager:
 
         except Exception as e:
             logger.error(f"Ошибка сохранения конфигурации: {e}")
-            return False
+
+    def reload_config(self) -> AppConfig:
+        """Принудительная перезагрузка конфигурации"""
+        self._config = None
+        return self.config
+
+    def reset_to_defaults(self) -> AppConfig:
+        """Сброс конфигурации к значениям по умолчанию"""
+        self._config = AppConfig()
+        self.save_config(self._config)
+        logger.info("Конфигурация сброшена к значениям по умолчанию")
+        return self._config
 
     def update_config(self, **kwargs) -> bool:
         """Обновление конфигурации"""

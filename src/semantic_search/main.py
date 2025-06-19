@@ -949,6 +949,102 @@ def system_info(documents: Optional[str], output: Optional[str]):
             click.echo(f"❌ Ошибка сохранения отчета: {e}")
 
 
+@cli.command()
+@click.option("--show", is_flag=True, help="Показать текущую конфигурацию")
+@click.option("--reset", is_flag=True, help="Сбросить к значениям по умолчанию")
+@click.option("--reload", is_flag=True, help="Перезагрузить конфигурацию из файла")
+@click.option(
+    "--set", nargs=2, multiple=True, help="Установить параметр: --set key value"
+)
+def config(show: bool, reset: bool, reload: bool, set: tuple):
+    """Управление конфигурацией приложения"""
+
+    from semantic_search.config import config_manager
+
+    if reset:
+        if click.confirm(
+            "Вы уверены, что хотите сбросить конфигурацию к значениям по умолчанию?"
+        ):
+            config_manager.reset_to_defaults()
+            click.echo("✅ Конфигурация сброшена к значениям по умолчанию")
+        else:
+            click.echo("❌ Сброс отменен")
+        return
+
+    if reload:
+        config_manager.reload_config()
+        click.echo("✅ Конфигурация перезагружена из файла")
+
+    if set:
+        for key, value in set:
+            # Пытаемся преобразовать значение в правильный тип
+            try:
+                # Числа
+                if value.isdigit():
+                    value = int(value)
+                elif value.replace(".", "", 1).isdigit():
+                    value = float(value)
+                # Булевы значения
+                elif value.lower() in ("true", "false"):
+                    value = value.lower() == "true"
+                # Числа с подчеркиваниями
+                elif "_" in value and value.replace("_", "").isdigit():
+                    value = int(value.replace("_", ""))
+
+            except Exception:
+                pass  # Оставляем как строку
+
+            # Определяем секцию и параметр
+            if "." in key:
+                section, param = key.split(".", 1)
+                config_manager.update_config(**{section: {param: value}})
+                click.echo(f"✅ Установлено: {section}.{param} = {value}")
+            else:
+                click.echo("❌ Неверный формат ключа. Используйте: section.parameter")
+
+    if show or (not reset and not reload and not set):
+        # Показываем текущую конфигурацию
+        current_config = config_manager.config
+
+        click.echo("\n📋 Текущая конфигурация:")
+        click.echo("=" * 60)
+
+        # Обработка текста
+        click.echo("\n📝 Обработка текста (text_processing):")
+        for key, value in current_config.text_processing.items():
+            if isinstance(value, int) and value > 1000:
+                click.echo(f"  {key}: {value:,}")
+            else:
+                click.echo(f"  {key}: {value}")
+
+        # Doc2Vec
+        click.echo("\n🧠 Параметры Doc2Vec (doc2vec):")
+        for key, value in current_config.doc2vec.items():
+            click.echo(f"  {key}: {value}")
+
+        # Поиск
+        click.echo("\n🔍 Параметры поиска (search):")
+        for key, value in current_config.search.items():
+            click.echo(f"  {key}: {value}")
+
+        # GUI
+        click.echo("\n💻 Параметры интерфейса (gui):")
+        for key, value in current_config.gui.items():
+            click.echo(f"  {key}: {value}")
+
+        # Суммаризация
+        click.echo("\n📄 Параметры суммаризации (summarization):")
+        for key, value in current_config.summarization.items():
+            click.echo(f"  {key}: {value}")
+
+        click.echo("\n💡 Примеры изменения параметров:")
+        click.echo(
+            "  semantic-search-cli config --set text_processing.max_text_length 10000000"
+        )
+        click.echo("  semantic-search-cli config --set doc2vec.vector_size 200")
+        click.echo("  semantic-search-cli config --set search.default_top_k 20")
+
+
 def cli_mode():
     """Запуск CLI режима"""
     cli()

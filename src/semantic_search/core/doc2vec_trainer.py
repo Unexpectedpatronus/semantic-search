@@ -58,6 +58,10 @@ class Doc2VecTrainer:
         min_count: Optional[int] = None,
         epochs: Optional[int] = None,
         workers: Optional[int] = None,
+        dm: Optional[int] = None,
+        negative: Optional[int] = None,
+        hs: Optional[int] = None,
+        sample: Optional[float] = None,
     ) -> Optional[Doc2Vec]:
         """
         Обучение модели Doc2Vec
@@ -69,6 +73,10 @@ class Doc2VecTrainer:
             min_count: Минимальная частота слова
             epochs: Количество эпох обучения
             workers: Количество потоков
+            dm: Distributed Memory (1) или Distributed Bag of Words (0)
+            negative: Размер negative sampling (если hs=0)
+            hs: Использовать Hierarchical Softmax (1) или negative sampling (0)
+            sample: Порог для downsampling высокочастотных слов
 
         Returns:
             Обученная модель Doc2Vec или None при ошибке
@@ -89,6 +97,12 @@ class Doc2VecTrainer:
             "epochs": epochs or self.config["epochs"],
             "workers": workers or self.config["workers"],
             "seed": self.config["seed"],
+            "dm": dm if dm is not None else self.config.get("dm", 1),
+            "negative": negative
+            if negative is not None
+            else self.config.get("negative", 5),
+            "hs": hs if hs is not None else self.config.get("hs", 0),
+            "sample": sample if sample is not None else self.config.get("sample", 1e-4),
         }
 
         logger.info("Подготовка данных для обучения...")
@@ -125,6 +139,10 @@ class Doc2VecTrainer:
         min_count: Optional[int] = None,
         epochs: Optional[int] = None,
         workers: Optional[int] = None,
+        dm: Optional[int] = None,
+        negative: Optional[int] = None,
+        hs: Optional[int] = None,
+        sample: Optional[float] = None,
     ) -> Optional[Doc2Vec]:
         """
         Обучение модели Doc2Vec с оптимизацией под объём корпуса.
@@ -139,6 +157,10 @@ class Doc2VecTrainer:
             min_count: Минимальная частота слова (по умолчанию из self.config)
             epochs: Количество эпох обучения (по умолчанию из self.config)
             workers: Количество потоков (по умолчанию из self.config)
+            dm: Distributed Memory (1) или Distributed Bag of Words (0)
+            negative: Размер negative sampling
+            hs: Использовать Hierarchical Softmax
+            sample: Порог для downsampling
 
         Returns:
             Обученная модель Doc2Vec или None при ошибке
@@ -156,13 +178,28 @@ class Doc2VecTrainer:
 
             tagged_docs = self.create_tagged_documents(corpus)
 
-            model = Doc2Vec(
-                vector_size=vector_size or self.config["vector_size"],
-                window=window or self.config["window"],
-                min_count=min_count or self.config["min_count"],
-                workers=workers or self.config["workers"],
-                seed=self.config["seed"],
-            )
+            # Все параметры модели
+            model_params = {
+                "vector_size": vector_size or self.config["vector_size"],
+                "window": window or self.config["window"],
+                "min_count": min_count or self.config["min_count"],
+                "workers": workers or self.config["workers"],
+                "seed": self.config["seed"],
+                "dm": dm if dm is not None else self.config.get("dm", 1),
+                "negative": negative
+                if negative is not None
+                else self.config.get("negative", 5),
+                "hs": hs if hs is not None else self.config.get("hs", 0),
+                "sample": sample
+                if sample is not None
+                else self.config.get("sample", 1e-4),
+            }
+
+            logger.info("Создание модели с параметрами:")
+            for key, value in model_params.items():
+                logger.info(f"  {key}: {value}")
+
+            model = Doc2Vec(**model_params)
 
             model.build_vocab(tagged_docs)
             logger.info(f"Словарь построен: {len(model.wv.key_to_index)} слов")
@@ -191,6 +228,10 @@ class Doc2VecTrainer:
                 min_count=min_count,
                 epochs=epochs,
                 workers=workers,
+                dm=dm,
+                negative=negative,
+                hs=hs,
+                sample=sample,
             )
 
     def save_model(
@@ -307,4 +348,11 @@ class Doc2VecTrainer:
             "window": self.model.window,
             "min_count": self.model.min_count,
             "epochs": self.model.epochs,
+            "dm": self.model.dm,
+            "dm_mean": getattr(self.model, "dm_mean", None),
+            "dm_concat": getattr(self.model, "dm_concat", None),
+            "negative": self.model.negative,
+            "hs": self.model.hs,
+            "sample": self.model.sample,
+            "workers": self.model.workers,
         }

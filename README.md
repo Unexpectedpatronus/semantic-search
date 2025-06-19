@@ -29,7 +29,7 @@ cd semantic-search
 ### 2. Установка Poetry (если не установлен)
 ```bash
 # Windows (PowerShell)
-(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
 
 # Linux/MacOS
 curl -sSL https://install.python-poetry.org | python3 -
@@ -39,9 +39,6 @@ curl -sSL https://install.python-poetry.org | python3 -
 ```bash
 # Установка всех зависимостей через Poetry
 poetry install
-
-# Активация виртуального окружения
-poetry shell
 ```
 
 ### 4. Установка языковой модели SpaCy
@@ -123,6 +120,17 @@ poetry run semantic-search-cli summarize-batch -d /path/to/documents \
 poetry run semantic-search-cli stats -d /path/to/documents -m my_model
 ```
 
+#### Команды конфига
+```bash
+# Показать текущую конфигурацию
+poetry run semantic-search-cli config --show
+
+# Установить максимальную длину текста
+poetry run semantic-search-cli config --set text_processing.max_text_length 5000000
+
+# Перезагрузить конфигурацию
+poetry run semantic-search-cli config --reload
+```
 ## 🏗️ Сборка в исполняемый файл
 
 ```bash
@@ -156,33 +164,44 @@ poetry run pytest tests/ -k "performance" --benchmark-only
 
 ```
 semantic-search/
+├── README.md                            # Информация о проекте
+├── config/                              # Сохраненные настройки
+│   └── app_config.json
+├── data/                                # Данные и модели
+│   ├── cache/                           # Кэш
+│   ├── models/                          # Обученные модели
+│   └── temp/                            # Временные файлы
+├── logs/                                # Логи
+├── pyproject.toml                       # Конфигурация Poetry
+├── scripts/                             # Вспомогательные скрипты
+│   ├── build.py
+│   ├── print_project_tree.py
+│   └── setup_spacy.py
 ├── src/
 │   └── semantic_search/
-│       ├── core/               # Основная логика
+│       ├── config.py                    # Настройки
+│       ├── core/                        # Основная логика
 │       │   ├── doc2vec_trainer.py
 │       │   ├── document_processor.py
 │       │   ├── search_engine.py
 │       │   └── text_summarizer.py
-│       ├── gui/                # Графический интерфейс
-│       │   ├── __init__.py
+│       ├── gui/                         # Графический интерфейс
 │       │   └── main_window.py
-│       ├── utils/              # Вспомогательные модули
-│       │   ├── cache_manager.py
-│       │   ├── file_utils.py
-│       │   ├── text_utils.py
-│       │   └── validators.py
-│       ├── config.py           # Конфигурация
-│       └── main.py             # Точка входа
-├── data/                       # Данные и модели
-│   ├── models/                 # Обученные модели
-│   ├── cache/                  # Кэш
-│   └── temp/                   # Временные файлы
-├── scripts/                    # Вспомогательные скрипты
-│   ├── setup_spacy.py
-│   └── build.py
-├── tests/                      # Тесты
-├── pyproject.toml             # Конфигурация Poetry
-└── README.md
+│       ├── main.py                      # Точка входа
+│       └── utils/                       # Вспомогательные модули
+│           ├── cache_manager.py
+│           ├── config_models.py
+│           ├── file_utils.py
+│           ├── logging_config.py
+│           ├── model_evaluation.py
+│           ├── notification_system.py
+│           ├── performance_monitor.py
+│           ├── statistics.py
+│           ├── task_manager.py
+│           ├── text_utils.py
+│           └── validators.py
+└── tests/                               # Тесты
+    └── test_core_functionality.py
 ```
 
 ## ⚙️ Конфигурация
@@ -195,20 +214,35 @@ semantic-search/
 {
   "text_processing": {
     "min_text_length": 100,
-    "max_text_length": 500000,
+    "max_text_length": 5000000,
     "min_tokens_count": 10,
-    "lemmatize": true
+    "min_token_length": 2,
+    "min_sentence_length": 10,
+    "remove_stop_words": true,
+    "lemmatize": true,
+    "max_file_size_mb": 100,
+    "chunk_size": 10000,
+    "spacy_max_length": 3000000
   },
   "doc2vec": {
     "vector_size": 150,
     "window": 10,
     "min_count": 2,
-    "epochs": 40
+    "epochs": 40,
+    "workers": 15,
+    "seed": 42,
+    "dm": 1,
+    "negative": 5,
+    "hs": 0,
+    "sample": 0.0001
   },
   "search": {
     "default_top_k": 10,
+    "max_top_k": 100,
     "similarity_threshold": 0.1,
-    "enable_caching": true
+    "enable_caching": true,
+    "cache_size": 1000,
+    "enable_filtering": true
   }
 }
 ```
