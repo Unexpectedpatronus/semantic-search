@@ -1,4 +1,4 @@
-"""Тесты основной функциональности"""
+"""Тесты основной функциональности (ИСПРАВЛЕННАЯ ВЕРСИЯ)"""
 
 import tempfile
 from pathlib import Path
@@ -35,24 +35,18 @@ class TestDocumentProcessor:
         # Настройка мока
         mock_instance = Mock()
         mock_extractor.return_value = mock_instance
-        mock_instance.find_documents.return_value = [
-            Path(
-                r"C:\Users\evgen\Evgeny\Dev_projects\Dev_Python\diplom\СТАТЬИ по ГЛОКАЛИЗАЦИИ"
-            )
-        ]
+
+        # Используем относительный путь вместо абсолютного
+        test_path = Path("test_documents")
+        mock_instance.find_documents.return_value = [test_path / "test_doc.pdf"]
         mock_instance.extract_text.return_value = "Test document content " * 20
 
         processor = DocumentProcessor()
         processor.file_extractor = mock_instance
 
-        docs = list(
-            processor.process_documents(
-                Path(
-                    r"C:\Users\evgen\Evgeny\Dev_projects\Dev_Python\diplom\СТАТЬИ по ГЛОКАЛИЗАЦИИ"
-                )
-            )
-        )
+        docs = list(processor.process_documents(test_path))
         assert len(docs) > 0
+        assert docs[0].relative_path == "test_doc.pdf"
 
 
 class TestValidators:

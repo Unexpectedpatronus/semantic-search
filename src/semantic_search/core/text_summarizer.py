@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 import numpy as np
 from loguru import logger
 
-from semantic_search.config import SUMMARIZATION_CONFIG
+from semantic_search.config import SUMMARIZATION_CONFIG, TEXT_PROCESSING_CONFIG
 from semantic_search.utils.text_utils import TextProcessor
 
 try:
@@ -30,6 +30,7 @@ class TextSummarizer:
         self.model = doc2vec_model
         self.text_processor = TextProcessor()
         self.config = SUMMARIZATION_CONFIG
+        self.chunk_size = TEXT_PROCESSING_CONFIG.get("chunk_size", 500_000)
 
     def set_model(self, model: Doc2Vec):
         """Установка модели Doc2Vec"""
@@ -232,9 +233,10 @@ class TextSummarizer:
         Returns:
             Список предложений выжимки
         """
-        # Разбиваем текст на части по 500K символов
-        chunk_size = 500_000
-        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+        chunks = [
+            text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)
+        ]
 
         all_important_sentences = []
 

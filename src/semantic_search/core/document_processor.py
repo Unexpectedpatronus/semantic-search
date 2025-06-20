@@ -76,7 +76,13 @@ class DocumentProcessor:
 
                 raw_text = self.file_extractor.extract_text(file_path)
 
-                # Используем актуальное значение из конфигурации
+                if len(raw_text) < self.config["min_text_length"]:
+                    logger.warning(
+                        f"Текст слишком короткий ({len(raw_text)} символов): {file_path}"
+                    )
+                    skipped_count += 1
+                    continue
+
                 max_text_length = self.config.get("max_text_length", 5_000_000)
 
                 if len(raw_text) > max_text_length:
@@ -84,13 +90,6 @@ class DocumentProcessor:
                         f"Текст обрезан с {len(raw_text):,} до {max_text_length:,} символов"
                     )
                     raw_text = raw_text[:max_text_length]
-
-                if len(raw_text) < self.config["min_text_length"]:
-                    logger.warning(
-                        f"Текст слишком короткий ({len(raw_text)} символов): {file_path}"
-                    )
-                    skipped_count += 1
-                    continue
 
                 tokens = self.text_processor.preprocess_text(raw_text)
 

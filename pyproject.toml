@@ -22,6 +22,9 @@ dependencies = [
     "seaborn (>=0.13.2,<0.14.0)"
 ]
 
+[project.optional-dependencies]
+openai = ["openai (>=1.88.0,<2.0.0)"]
+
 [project.scripts]
 semantic-search = "semantic_search.main:main"
 semantic-search-cli = "semantic_search.main:cli_mode"

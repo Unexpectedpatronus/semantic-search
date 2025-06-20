@@ -35,6 +35,7 @@ from semantic_search.core.doc2vec_trainer import Doc2VecTrainer
 from semantic_search.core.document_processor import DocumentProcessor
 from semantic_search.core.search_engine import SemanticSearchEngine
 from semantic_search.core.text_summarizer import TextSummarizer
+from semantic_search.gui.evaluation_widget import EvaluationWidget
 from semantic_search.utils.file_utils import FileExtractor
 from semantic_search.utils.statistics import (
     calculate_statistics_from_processed_docs,
@@ -113,7 +114,7 @@ class TrainingThread(QThread):
             self.statistics.emit(stats)
 
             # Обучение модели
-            self.progress.emit(50, "Начинаем обучение модели...")
+            # self.progress.emit(50, "Начинаем обучение модели...")
 
             trainer = Doc2VecTrainer()
 
@@ -197,17 +198,20 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget)
 
-        # Вкладка поиска
-        self.create_search_tab()
-
         # Вкладка обучения
         self.create_training_tab()
+
+        # Вкладка поиска
+        self.create_search_tab()
 
         # Вкладка суммаризации
         self.create_summarization_tab()
 
         # Вкладка статистики
         self.create_statistics_tab()
+
+        # Вкладка оценки и сравнения
+        self.create_evaluation_tab()
 
         # Статус бар
         self.status_bar = QStatusBar()
@@ -528,6 +532,11 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(stats_widget, "📊 Статистика")
 
+    def create_evaluation_tab(self):
+        """Создание вкладки оценки и сравнения"""
+        self.evaluation_widget = EvaluationWidget()
+        self.tab_widget.addTab(self.evaluation_widget, "📊 Оценка методов")
+
     def load_models(self):
         """Загрузка списка доступных моделей"""
         self.model_combo.clear()
@@ -561,6 +570,10 @@ class MainWindow(QMainWindow):
             self.summarizer = None
             self.model_status_label.setText("Модель не загружена")
             self.model_status_label.setStyleSheet("color: red;")
+
+            # Отключаем evaluation widget
+            if hasattr(self, "evaluation_widget"):
+                self.evaluation_widget.set_search_engine(None, None)
             return
 
         # Загружаем модель
@@ -574,6 +587,11 @@ class MainWindow(QMainWindow):
                 self.search_engine = SemanticSearchEngine(model, trainer.corpus_info)
                 self.summarizer = TextSummarizer(model)
 
+                # Передаем данные в evaluation widget
+                if hasattr(self, "evaluation_widget"):
+                    self.evaluation_widget.set_search_engine(
+                        self.search_engine, trainer.corpus_info
+                    )
                 self.model_status_label.setText(f"Модель '{model_name}' загружена")
                 self.model_status_label.setStyleSheet("color: green;")
 
@@ -585,6 +603,10 @@ class MainWindow(QMainWindow):
                 self.summarizer = None
                 self.model_status_label.setText("Ошибка загрузки модели")
                 self.model_status_label.setStyleSheet("color: red;")
+
+                if hasattr(self, "evaluation_widget"):
+                    self.evaluation_widget.set_search_engine(None, None)
+
                 QMessageBox.warning(
                     self, "Ошибка", f"Не удалось загрузить модель '{model_name}'"
                 )

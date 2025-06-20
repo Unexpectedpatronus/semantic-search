@@ -30,7 +30,7 @@ def _initialize_spacy():
         try:
             _nlp = spacy.load(SPACY_MODEL)
             # Увеличиваем лимит для длинных текстов
-            _nlp.max_length = 3_000_000  # 3 миллиона символов
+            _nlp.max_length = TEXT_PROCESSING_CONFIG.get("spacy_max_length", 3_000_000)
             _spacy_available = True
             logger.info(f"SpaCy модель {SPACY_MODEL} загружена")
         except OSError:
@@ -38,7 +38,7 @@ def _initialize_spacy():
                 f"SpaCy модель {SPACY_MODEL} не найдена. Используется базовая обработка"
             )
             _nlp = Russian()
-            _nlp.max_length = 3_000_000
+            _nlp.max_length = TEXT_PROCESSING_CONFIG.get("spacy_max_length", 3_000_000)
             _spacy_available = False
 
     except ImportError:
@@ -90,7 +90,8 @@ class TextProcessor:
         self.config = TEXT_PROCESSING_CONFIG
         self._nlp = None
         self._spacy_available = None
-        self.max_chunk_size = 800_000
+        # Используем chunk_size из конфига
+        self.max_chunk_size = self.config.get("chunk_size", 800_000)
 
     def _get_nlp(self):
         """Получить SpaCy модель (с ленивой загрузкой)"""
@@ -228,10 +229,10 @@ class TextProcessor:
         _, spacy_available = self._get_nlp()
 
         if spacy_available:
-            logger.debug("Используется SpaCy для препроцессинга")
+            logger.info("Используется SpaCy для препроцессинга")
             tokens = self.preprocess_with_spacy(cleaned_text)
         else:
-            logger.debug("Используется базовый препроцессинг")
+            logger.info("Используется базовый препроцессинг")
             tokens = self.preprocess_basic(cleaned_text)
 
         return tokens

@@ -17,9 +17,18 @@ TEMP_DIR = DATA_DIR / "temp"
 LOGS_DIR = PROJECT_ROOT / "logs"
 CACHE_DIR = DATA_DIR / "cache"
 CONFIG_DIR = PROJECT_ROOT / "config"
+EVALUATION_RESULTS_DIR = DATA_DIR / "evaluation_results"
 
 # Создаем директории
-for dir_path in [DATA_DIR, MODELS_DIR, TEMP_DIR, LOGS_DIR, CACHE_DIR, CONFIG_DIR]:
+for dir_path in [
+    DATA_DIR,
+    MODELS_DIR,
+    TEMP_DIR,
+    LOGS_DIR,
+    CACHE_DIR,
+    CONFIG_DIR,
+    EVALUATION_RESULTS_DIR,
+]:
     dir_path.mkdir(exist_ok=True, parents=True)
 
 
@@ -56,7 +65,7 @@ class AppConfig:
                 "remove_stop_words": True,
                 "lemmatize": True,
                 "max_file_size_mb": 100,  # Увеличено до 100MB
-                "chunk_size": 10000,  # Для больших файлов
+                "chunk_size": 500_000,  # Для больших файлов
                 "spacy_max_length": 3_000_000,  # Лимит SpaCy
             }
 

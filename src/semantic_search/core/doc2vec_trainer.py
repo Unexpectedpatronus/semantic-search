@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pickle
-from typing import TYPE_CHECKING, List, Optional, Tuple
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -27,6 +28,8 @@ class Doc2VecTrainer:
         self.model: Optional[Doc2Vec] = None
         self.config = DOC2VEC_CONFIG
         self.corpus_info: Optional[List[Tuple[List[str], str, dict]]] = None
+        self.training_time: Optional[float] = None
+        self.training_metadata: Dict[str, Any] = {}
 
     def create_tagged_documents(
         self, corpus: List[Tuple[List[str], str, dict]]
@@ -89,6 +92,8 @@ class Doc2VecTrainer:
             logger.error("Корпус пуст, обучение невозможно")
             return None
 
+        start_time = time.time()
+
         # Используем параметры из config или переданные
         params = {
             "vector_size": vector_size or self.config["vector_size"],
@@ -116,10 +121,23 @@ class Doc2VecTrainer:
             # Создаем и обучаем модель
             model = Doc2Vec(tagged_docs, **params)
 
+            self.training_time = time.time() - start_time
+            self.training_metadata = {
+                "training_time": self.training_time,
+                "training_date": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "corpus_size": len(corpus),
+                "parameters": params,
+                "vocabulary_size": len(model.wv.key_to_index),
+                "documents_count": len(model.dv),
+            }
+
             self.model = model
             self.corpus_info = corpus
 
             logger.info("Обучение модели завершено успешно!")
+            logger.info(
+                f"Время обучения: {self.training_time:.2f} секунд ({self.training_time / 60:.1f} минут)"
+            )
             logger.info(
                 f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
             )

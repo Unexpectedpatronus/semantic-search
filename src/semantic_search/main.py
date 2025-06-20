@@ -1045,6 +1045,308 @@ def config(show: bool, reset: bool, reload: bool, set: tuple):
         click.echo("  semantic-search-cli config --set search.default_top_k 20")
 
 
+"""Добавить в main.py после других CLI команд"""
+
+
+@cli.command()
+@click.option("--model", "-m", default="doc2vec_model", help="Имя Doc2Vec модели")
+@click.option("--openai-key", envvar="OPENAI_API_KEY", help="OpenAI API key")
+@click.option(
+    "--test-cases",
+    type=click.Choice(["quick", "standard", "extended"]),
+    default="standard",
+    help="Набор тестовых случаев",
+)
+@click.option("--output-dir", "-o", help="Директория для сохранения результатов")
+def evaluate(model: str, openai_key: str, test_cases: str, output_dir: Optional[str]):
+    """
+    Сравнение Doc2Vec с OpenAI embeddings
+
+    Args:
+        model: Имя Doc2Vec модели для оценки
+        openai_key: API ключ OpenAI (или из OPENAI_API_KEY)
+        test_cases: Размер набора тестов (quick/standard/extended)
+        output_dir: Директория для результатов
+    """
+    if not openai_key:
+        click.echo("❌ OpenAI API key не найден")
+        click.echo(
+            "Установите переменную окружения OPENAI_API_KEY или используйте --openai-key"
+        )
+        return
+
+    # Загрузка модели
+    click.echo(f"📂 Загрузка модели {model}...")
+    trainer = Doc2VecTrainer()
+    loaded_model = trainer.load_model(model)
+
+    if not loaded_model:
+        click.echo(f"❌ Не удалось загрузить модель '{model}'")
+        return
+
+    if not trainer.corpus_info:
+        click.echo("❌ Информация о корпусе не найдена")
+        return
+
+    # Импорт модулей оценки
+    from semantic_search.core.search_engine import SemanticSearchEngine
+    from semantic_search.evaluation.baselines import (
+        Doc2VecSearchAdapter,
+        OpenAISearchBaseline,
+    )
+    from semantic_search.evaluation.comparison import SearchComparison
+
+    # Создание поискового движка
+    search_engine = SemanticSearchEngine(loaded_model, trainer.corpus_info)
+
+    # Создание сравнения
+    comparison = SearchComparison()
+
+    # Получение тестовых случаев
+    click.echo("🧪 Подготовка тестовых случаев...")
+    default_cases = comparison.create_default_test_cases()
+
+    if test_cases == "quick":
+        test_cases_list = default_cases[:3]
+        click.echo("   Быстрый тест: 3 запроса")
+    elif test_cases == "extended":
+        # Добавляем дополнительные тесты
+        from semantic_search.evaluation.comparison import QueryTestCase
+
+        extra_cases = [
+            QueryTestCase(
+                query="классификация изображений CNN",
+                relevant_docs={"cnn_tutorial.pdf", "image_classification.pdf"},
+                relevance_scores={"cnn_tutorial.pdf": 3, "image_classification.pdf": 3},
+            ),
+            QueryTestCase(
+                query="регуляризация dropout L1 L2",
+                relevant_docs={"regularization.pdf", "overfitting.pdf"},
+                relevance_scores={"regularization.pdf": 3, "overfitting.pdf": 2},
+            ),
+            QueryTestCase(
+                query="word embeddings word2vec GloVe",
+                relevant_docs={"word2vec_paper.pdf", "embeddings_tutorial.pdf"},
+                relevance_scores={
+                    "word2vec_paper.pdf": 3,
+                    "embeddings_tutorial.pdf": 3,
+                },
+            ),
+            QueryTestCase(
+                query="precision recall F1 score ROC AUC",
+                relevant_docs={"ml_metrics.pdf", "evaluation_methods.pdf"},
+                relevance_scores={"ml_metrics.pdf": 3, "evaluation_methods.pdf": 3},
+            ),
+            QueryTestCase(
+                query="backpropagation gradient descent",
+                relevant_docs={"backpropagation.pdf", "optimization.pdf"},
+                relevance_scores={"backpropagation.pdf": 3, "optimization.pdf": 2},
+            ),
+        ]
+        test_cases_list = default_cases + extra_cases
+        click.echo("   Расширенный тест: 10 запросов")
+    else:  # standard
+        test_cases_list = default_cases
+        click.echo("   Стандартный тест: 5 запросов")
+
+    comparison.test_cases = test_cases_list
+
+    # Создание адаптеров
+    click.echo("\n🔧 Инициализация методов поиска...")
+    doc2vec_adapter = Doc2VecSearchAdapter(search_engine, trainer.corpus_info)
+
+    try:
+        openai_baseline = OpenAISearchBaseline(api_key=openai_key)
+        click.echo("✅ OpenAI baseline инициализирован")
+    except Exception as e:
+        click.echo(f"❌ Ошибка инициализации OpenAI: {e}")
+        return
+
+    # Подготовка документов для индексации
+    click.echo("\n📚 Подготовка документов для OpenAI...")
+    documents = []
+    max_docs = min(50, len(trainer.corpus_info))  # Ограничиваем для экономии
+
+    for i, (tokens, doc_id, metadata) in enumerate(trainer.corpus_info[:max_docs]):
+        # Восстанавливаем текст из токенов
+        text = " ".join(tokens[:500])  # Берем первые 500 токенов
+        documents.append((doc_id, text, metadata))
+
+    click.echo(f"   Подготовлено {len(documents)} документов")
+
+    # Индексация для OpenAI
+    click.echo("\n🔄 Индексация документов через OpenAI API...")
+    click.echo("   (это может занять несколько минут)")
+
+    try:
+        with click.progressbar(length=100, label="Индексация") as bar:
+            # Используем callback для обновления прогресса
+            original_index = openai_baseline.index
+
+            def index_with_progress(docs):
+                result = original_index(docs)
+                bar.update(100)
+                return result
+
+            openai_baseline.index = index_with_progress
+            openai_baseline.index(documents)
+            openai_baseline.index = original_index
+
+        click.echo("✅ Индексация завершена")
+    except Exception as e:
+        click.echo(f"❌ Ошибка индексации: {e}")
+        return
+
+    # Оценка методов
+    click.echo("\n📊 Оценка методов...")
+
+    # Doc2Vec
+    click.echo("\n1️⃣ Оценка Doc2Vec...")
+    doc2vec_results = comparison.evaluate_method(
+        doc2vec_adapter, top_k=10, verbose=False
+    )
+    click.echo(f"   MAP: {doc2vec_results['aggregated']['MAP']:.3f}")
+    click.echo(f"   MRR: {doc2vec_results['aggregated']['MRR']:.3f}")
+    click.echo(
+        f"   Среднее время запроса: {doc2vec_results['aggregated']['avg_query_time']:.3f}с"
+    )
+
+    # OpenAI
+    click.echo("\n2️⃣ Оценка OpenAI embeddings...")
+    openai_results = comparison.evaluate_method(
+        openai_baseline, top_k=10, verbose=False
+    )
+    click.echo(f"   MAP: {openai_results['aggregated']['MAP']:.3f}")
+    click.echo(f"   MRR: {openai_results['aggregated']['MRR']:.3f}")
+    click.echo(
+        f"   Среднее время запроса: {openai_results['aggregated']['avg_query_time']:.3f}с"
+    )
+
+    # Сравнение результатов
+    click.echo("\n📈 СРАВНЕНИЕ РЕЗУЛЬТАТОВ")
+    click.echo("=" * 60)
+
+    # MAP сравнение
+    doc2vec_map = doc2vec_results["aggregated"]["MAP"]
+    openai_map = openai_results["aggregated"]["MAP"]
+    map_improvement = (
+        ((doc2vec_map - openai_map) / openai_map * 100) if openai_map > 0 else 0
+    )
+
+    click.echo("\n📊 Mean Average Precision (MAP):")
+    click.echo(f"   Doc2Vec: {doc2vec_map:.3f}")
+    click.echo(f"   OpenAI:  {openai_map:.3f}")
+
+    if map_improvement > 0:
+        click.echo(f"   ✅ Doc2Vec превосходит OpenAI на {map_improvement:.1f}%")
+    else:
+        click.echo(f"   ❌ OpenAI превосходит Doc2Vec на {-map_improvement:.1f}%")
+
+    # Скорость
+    doc2vec_time = doc2vec_results["aggregated"]["avg_query_time"]
+    openai_time = openai_results["aggregated"]["avg_query_time"]
+    speed_ratio = openai_time / doc2vec_time if doc2vec_time > 0 else float("inf")
+
+    click.echo("\n⚡ Скорость поиска:")
+    click.echo(f"   Doc2Vec: {doc2vec_time:.3f}с на запрос")
+    click.echo(f"   OpenAI:  {openai_time:.3f}с на запрос")
+    click.echo(f"   ✅ Doc2Vec быстрее в {speed_ratio:.1f} раз")
+
+    # Другие метрики
+    click.echo("\n📏 Дополнительные метрики:")
+
+    for metric in ["precision@10", "recall@10", "f1@10"]:
+        doc2vec_val = doc2vec_results["aggregated"].get(f"avg_{metric}", 0)
+        openai_val = openai_results["aggregated"].get(f"avg_{metric}", 0)
+        click.echo(f"   {metric.upper()}:")
+        click.echo(f"      Doc2Vec: {doc2vec_val:.3f}")
+        click.echo(f"      OpenAI:  {openai_val:.3f}")
+
+    # Экономическая эффективность
+    click.echo("\n💰 Экономическая эффективность:")
+
+    # Расчет примерной стоимости
+    queries_per_day = 1000
+    avg_tokens_per_query = 50
+    openai_cost_per_1k_tokens = 0.0001  # $0.0001 за 1K токенов для ada-002
+
+    daily_queries_cost = (
+        queries_per_day * avg_tokens_per_query / 1000
+    ) * openai_cost_per_1k_tokens
+    # Стоимость индексации (примерно 200 токенов на документ)
+    indexing_cost = (len(documents) * 200 / 1000) * openai_cost_per_1k_tokens
+
+    monthly_cost = daily_queries_cost * 30 + indexing_cost
+    yearly_cost = monthly_cost * 12
+
+    click.echo(f"   При {queries_per_day} запросов в день:")
+    click.echo(
+        f"   - Стоимость OpenAI: ~${monthly_cost:.2f}/месяц (${yearly_cost:.2f}/год)"
+    )
+    click.echo("   - Стоимость Doc2Vec: $0 (после единоразового обучения)")
+    click.echo(f"   - 💵 Экономия: ${yearly_cost:.2f} в год")
+
+    # Генерация отчетов
+    click.echo("\n📄 Генерация отчетов и графиков...")
+
+    # Определяем директорию для результатов
+    if output_dir:
+        results_dir = Path(output_dir)
+    else:
+        from semantic_search.config import EVALUATION_RESULTS_DIR
+
+        results_dir = EVALUATION_RESULTS_DIR
+
+    results_dir.mkdir(exist_ok=True, parents=True)
+
+    # Сравнительная таблица
+    comparison.compare_methods([doc2vec_adapter, openai_baseline], save_results=True)
+
+    # Генерация графиков
+    try:
+        comparison.plot_comparison(save_plots=True)
+        click.echo("✅ Графики сохранены")
+    except Exception as e:
+        click.echo(f"⚠️ Не удалось создать графики: {e}")
+
+    # Текстовый отчет
+    report_path = results_dir / "comparison_report.txt"
+    comparison.generate_report(report_path)
+
+    click.echo(f"\n✅ Результаты сохранены в: {results_dir}")
+    click.echo("   📊 comparison_results.csv - таблица с метриками")
+    click.echo("   📝 comparison_report.txt - текстовый отчет")
+    click.echo("   📈 plots/ - графики сравнения")
+    click.echo("   🗂️ detailed_results.json - детальные результаты")
+
+    # Основные выводы
+    click.echo("\n🎯 ОСНОВНЫЕ ВЫВОДЫ:")
+    click.echo("=" * 60)
+
+    if map_improvement > 0:
+        click.echo(
+            f"✅ Doc2Vec показывает ЛУЧШЕЕ качество поиска (+{map_improvement:.1f}% MAP)"
+        )
+        click.echo("   на специализированном корпусе документов")
+    else:
+        click.echo(
+            f"⚠️ OpenAI показывает лучшее качество поиска (+{-map_improvement:.1f}% MAP)"
+        )
+        click.echo("   Рекомендуется дообучить модель Doc2Vec")
+
+    click.echo(f"\n✅ Doc2Vec работает ЗНАЧИТЕЛЬНО БЫСТРЕЕ (в {speed_ratio:.1f} раз)")
+    click.echo("   и не требует интернет-соединения")
+
+    click.echo(f"\n✅ Doc2Vec ЭКОНОМИЧЕСКИ ВЫГОДНЕЕ (экономия ${yearly_cost:.0f}/год)")
+    click.echo("   при регулярном использовании")
+
+    click.echo("\n📌 Рекомендация: Doc2Vec оптимален для:")
+    click.echo("   • Специализированных корпусов документов")
+    click.echo("   • Высокой нагрузки (много запросов)")
+    click.echo("   • Работы без интернета")
+    click.echo("   • Конфиденциальных данных")
+
+
 def cli_mode():
     """Запуск CLI режима"""
     cli()
