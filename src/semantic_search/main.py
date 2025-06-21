@@ -183,7 +183,7 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
                 # Вычисляем общее время
                 training_time = time.time() - start_time
                 trainer.training_metadata["training_time_formatted"] = (
-                    f"{training_time:.1f}с ({training_time / 60:.2f}м)"
+                    f"{training_time:.1f}с ({training_time / 60:.1f}м)"
                 )
                 trainer.training_metadata["training_date"] = time.strftime(
                     "%Y-%m-%d %H:%M:%S", time.localtime(start_time)

@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from semantic_search.config import DATA_DIR, GUI_CONFIG, MODELS_DIR
+from semantic_search.config import GUI_CONFIG, MODELS_DIR
 from semantic_search.core.doc2vec_trainer import Doc2VecTrainer
 from semantic_search.core.document_processor import DocumentProcessor
 from semantic_search.core.search_engine import SemanticSearchEngine
@@ -131,7 +131,7 @@ class TrainingThread(QThread):
                 # Вычисляем общее время включая обработку документов
                 training_time = time.time() - start_time
                 trainer.training_metadata["training_time_formatted"] = (
-                    f"{training_time:.1f}с ({training_time / 60:.2f}м)"
+                    f"{training_time:.1f}с ({training_time / 60:.1f}м)"
                 )
                 trainer.training_metadata["training_date"] = time.strftime(
                     "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
         self.document_viewer.setReadOnly(True)
         splitter.addWidget(self.document_viewer)
 
-        splitter.setSizes([400, 600])
+        splitter.setSizes([600, 400])
         layout.addWidget(splitter)
 
         self.tab_widget.addTab(search_widget, "🔍 Поиск")
@@ -808,71 +808,59 @@ class MainWindow(QMainWindow):
         """Обработка выбора результата"""
         result = item.data(Qt.ItemDataRole.UserRole)
 
-        # Пытаемся загрузить и показать документ
         try:
-            file_path = Path(result.doc_id)
-            if not file_path.is_absolute():
-                # Если путь относительный, пытаемся найти файл
-                for parent in Path.cwd().parents:
-                    full_path = parent / file_path
-                    if full_path.exists():
-                        file_path = full_path
-                        break
+            # Получаем полный путь из метаданных
+            if result.metadata and "full_path" in result.metadata:
+                file_path = Path(result.metadata["full_path"])
 
-            if file_path.exists():
-                extractor = FileExtractor()
-                text = extractor.extract_text(file_path)
-
-                if text:
-                    # Показываем первые 5000 символов
-                    preview = text[:5000]
-                    if len(text) > 5000:
-                        preview += "\n\n... (текст обрезан) ..."
-
-                    self.document_viewer.setPlainText(preview)
-
-                    # Добавляем метаданные
-                    metadata_text = "\n\n--- Метаданные ---\n"
-                    metadata_text += f"Файл: {result.doc_id}\n"
-                    metadata_text += f"Схожесть: {result.similarity:.3f}\n"
-
-                    if result.metadata:
-                        metadata_text += (
-                            f"Размер: {result.metadata.get('file_size', 0)} байт\n"
-                        )
-                        metadata_text += (
-                            f"Токенов: {result.metadata.get('tokens_count', 0)}\n"
-                        )
-
-                    self.document_viewer.append(metadata_text)
-                else:
-                    self.document_viewer.setPlainText(
-                        "Не удалось извлечь текст из документа"
-                    )
-            else:
-                # Попробуем найти файл относительно DATA_DIR
-                alternative_path = DATA_DIR.parent / file_path
-                if alternative_path.exists():
-                    file_path = alternative_path
+                if file_path.exists():
                     extractor = FileExtractor()
                     text = extractor.extract_text(file_path)
 
                     if text:
+                        # Показываем первые 5000 символов
                         preview = text[:5000]
                         if len(text) > 5000:
-                            preview += "\n\n... (текст обрезан) ..."
+                            preview += "\n\n... (текст обрезан для предпросмотра) ..."
+
                         self.document_viewer.setPlainText(preview)
+
+                        # Добавляем метаданные
+                        metadata_text = "\n\n" + "=" * 50 + "\n"
+                        metadata_text += "📊 МЕТАДАННЫЕ ДОКУМЕНТА\n"
+                        metadata_text += "=" * 50 + "\n"
+                        metadata_text += f"📄 Файл: {result.doc_id}\n"
+                        metadata_text += f"📍 Полный путь: {file_path}\n"
+                        metadata_text += f"🎯 Схожесть: {result.similarity:.3f}\n"
+
+                        if result.metadata:
+                            file_size = result.metadata.get("file_size", 0)
+                            if file_size > 0:
+                                size_mb = file_size / 1024 / 1024
+                                metadata_text += f"💾 Размер: {size_mb:.2f} МБ\n"
+                            metadata_text += f"📝 Токенов: {result.metadata.get('tokens_count', 0):,}\n"
+
+                        self.document_viewer.append(metadata_text)
                     else:
                         self.document_viewer.setPlainText(
-                            "Не удалось извлечь текст из документа"
+                            f"❌ Не удалось извлечь текст из документа:\n{file_path}"
                         )
                 else:
-                    self.document_viewer.setPlainText(f"Файл не найден: {file_path}")
+                    self.document_viewer.setPlainText(
+                        f"❌ Файл не найден по сохраненному пути:\n{file_path}\n\n"
+                        f"Файл мог быть перемещен или удален после обучения модели."
+                    )
+            else:
+                self.document_viewer.setPlainText(
+                    f"❌ В метаданных отсутствует информация о полном пути файла.\n"
+                    f"Документ: {result.doc_id}\n\n"
+                    f"Необходимо переобучить модель для сохранения путей к файлам."
+                )
 
         except Exception as e:
             logger.error(f"Ошибка при отображении документа: {e}")
             self.document_viewer.setPlainText(
-                f"Ошибка при загрузке документа: {str(e)}"
+                f"❌ Ошибка при загрузке документа:\n{str(e)}"
             )
 
     def create_summary(self):

@@ -105,6 +105,7 @@ class DocumentProcessor:
                     "extension": file_path.suffix,
                     "tokens_count": len(tokens),
                     "text_length": len(raw_text),
+                    "full_path": str(file_path.absolute()),
                 }
 
                 processed_count += 1

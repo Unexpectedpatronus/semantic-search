@@ -47,38 +47,38 @@ class SearchComparison:
     def create_default_test_cases(self) -> List[QueryTestCase]:
         """Создать стандартный набор тестовых случаев для демонстрации"""
         test_cases = [
+            # QueryTestCase(
+            #     query="машинное обучение и нейронные сети",
+            #     relevant_docs={
+            #         "ml_basics.pdf",
+            #         "neural_networks.pdf",
+            #         "deep_learning.pdf",
+            #     },
+            #     relevance_scores={
+            #         "ml_basics.pdf": 3,
+            #         "neural_networks.pdf": 3,
+            #         "deep_learning.pdf": 2,
+            #         "ai_overview.pdf": 1,
+            #     },
+            #     description="Базовый запрос по ML",
+            # ),
+            # QueryTestCase(
+            #     query="глубокое обучение для обработки изображений",
+            #     relevant_docs={
+            #         "cnn_tutorial.pdf",
+            #         "image_processing.pdf",
+            #         "deep_learning.pdf",
+            #     },
+            #     relevance_scores={
+            #         "cnn_tutorial.pdf": 3,
+            #         "image_processing.pdf": 3,
+            #         "deep_learning.pdf": 2,
+            #         "computer_vision.pdf": 2,
+            #     },
+            #     description="Специализированный запрос по CV",
+            # ),
             QueryTestCase(
-                query="машинное обучение и нейронные сети",
-                relevant_docs={
-                    "ml_basics.pdf",
-                    "neural_networks.pdf",
-                    "deep_learning.pdf",
-                },
-                relevance_scores={
-                    "ml_basics.pdf": 3,
-                    "neural_networks.pdf": 3,
-                    "deep_learning.pdf": 2,
-                    "ai_overview.pdf": 1,
-                },
-                description="Базовый запрос по ML",
-            ),
-            QueryTestCase(
-                query="глубокое обучение для обработки изображений",
-                relevant_docs={
-                    "cnn_tutorial.pdf",
-                    "image_processing.pdf",
-                    "deep_learning.pdf",
-                },
-                relevance_scores={
-                    "cnn_tutorial.pdf": 3,
-                    "image_processing.pdf": 3,
-                    "deep_learning.pdf": 2,
-                    "computer_vision.pdf": 2,
-                },
-                description="Специализированный запрос по CV",
-            ),
-            QueryTestCase(
-                query="обработка естественного языка трансформеры",
+                query="методы глокализации",
                 relevant_docs={
                     "nlp_transformers.pdf",
                     "bert_paper.pdf",
@@ -92,30 +92,30 @@ class SearchComparison:
                 },
                 description="Запрос по NLP",
             ),
-            QueryTestCase(
-                query="градиентный спуск оптимизация",
-                relevant_docs={"optimization_methods.pdf", "gradient_descent.pdf"},
-                relevance_scores={
-                    "optimization_methods.pdf": 3,
-                    "gradient_descent.pdf": 3,
-                    "ml_basics.pdf": 1,
-                },
-                description="Запрос по методам оптимизации",
-            ),
-            QueryTestCase(
-                query="рекуррентные нейронные сети LSTM",
-                relevant_docs={
-                    "rnn_tutorial.pdf",
-                    "lstm_explained.pdf",
-                    "sequence_models.pdf",
-                },
-                relevance_scores={
-                    "rnn_tutorial.pdf": 3,
-                    "lstm_explained.pdf": 3,
-                    "sequence_models.pdf": 2,
-                },
-                description="Запрос по RNN",
-            ),
+            # QueryTestCase(
+            #     query="градиентный спуск оптимизация",
+            #     relevant_docs={"optimization_methods.pdf", "gradient_descent.pdf"},
+            #     relevance_scores={
+            #         "optimization_methods.pdf": 3,
+            #         "gradient_descent.pdf": 3,
+            #         "ml_basics.pdf": 1,
+            #     },
+            #     description="Запрос по методам оптимизации",
+            # ),
+            # QueryTestCase(
+            #     query="рекуррентные нейронные сети LSTM",
+            #     relevant_docs={
+            #         "rnn_tutorial.pdf",
+            #         "lstm_explained.pdf",
+            #         "sequence_models.pdf",
+            #     },
+            #     relevance_scores={
+            #         "rnn_tutorial.pdf": 3,
+            #         "lstm_explained.pdf": 3,
+            #         "sequence_models.pdf": 2,
+            #     },
+            #     description="Запрос по RNN",
+            # ),
         ]
 
         return test_cases
