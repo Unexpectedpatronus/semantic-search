@@ -99,6 +99,7 @@ class DocumentProcessor:
                     continue
 
                 relative_path = str(file_path.relative_to(root_path))
+                relative_path = relative_path.replace("\\", "/")
 
                 metadata = {
                     "file_size": file_path.stat().st_size,
@@ -106,7 +107,12 @@ class DocumentProcessor:
                     "tokens_count": len(tokens),
                     "text_length": len(raw_text),
                     "full_path": str(file_path.absolute()),
+                    "root_path": str(root_path.absolute()),
                 }
+                # print(f"file_path:   {str(file_path)}")
+                # print(f"relative_path:  {str(relative_path)}")
+                # print(f"metadata[full_path]:  {metadata['full_path']}")
+                # print(f"metadata[root_path]:   {metadata['root_path']}")
 
                 processed_count += 1
                 yield ProcessedDocument(

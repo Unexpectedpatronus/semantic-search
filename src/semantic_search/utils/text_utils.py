@@ -229,10 +229,10 @@ class TextProcessor:
         _, spacy_available = self._get_nlp()
 
         if spacy_available:
-            logger.info("Используется SpaCy для препроцессинга")
+            logger.debug("Используется SpaCy для препроцессинга")
             tokens = self.preprocess_with_spacy(cleaned_text)
         else:
-            logger.info("Используется базовый препроцессинг")
+            logger.debug("Используется базовый препроцессинг")
             tokens = self.preprocess_basic(cleaned_text)
 
         return tokens

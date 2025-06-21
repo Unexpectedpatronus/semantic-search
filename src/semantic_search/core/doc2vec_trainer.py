@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -29,6 +30,7 @@ class Doc2VecTrainer:
         self.config = DOC2VEC_CONFIG
         self.corpus_info: Optional[List[Tuple[List[str], str, dict]]] = None
         self.training_metadata: Dict[str, Any] = {}
+        self.documents_base_path: Optional[Path] = None
 
     def create_tagged_documents(
         self, corpus: List[Tuple[List[str], str, dict]]
@@ -350,6 +352,24 @@ class Doc2VecTrainer:
                     with open(metadata_path, "r", encoding="utf-8") as f:
                         self.training_metadata = json.load(f)
                     logger.info("Метаданные обучения загружены")
+
+                    # Загружаем базовый путь документов
+                    if "documents_base_path" in self.training_metadata:
+                        self.documents_base_path = Path(
+                            self.training_metadata["documents_base_path"]
+                        )
+                        logger.info(
+                            f"Базовый путь документов: {self.documents_base_path}"
+                        )
+
+                        # Проверяем существование пути
+                        if not self.documents_base_path.exists():
+                            logger.warning(
+                                f"Базовый путь не существует: {self.documents_base_path}"
+                            )
+                    else:
+                        logger.warning("Базовый путь документов не найден в метаданных")
+
                 except Exception as e:
                     logger.warning(f"Не удалось загрузить метаданные обучения: {e}")
                     self.training_metadata = {}

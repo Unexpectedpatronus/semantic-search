@@ -1,6 +1,8 @@
 """Главное окно приложения"""
 
 import json
+import os
+import sys
 import time
 from pathlib import Path
 from typing import List
@@ -92,7 +94,7 @@ class TrainingThread(QThread):
                 return
 
             # Обработка каждого документа
-            step_size = 40 / len(file_paths)
+            step_size = 70 / len(file_paths)
             current_progress = 10
 
             for i, doc in enumerate(processor.process_documents(self.documents_path)):
@@ -123,32 +125,51 @@ class TrainingThread(QThread):
             trainer = Doc2VecTrainer()
 
             # Обучение модели
+            self.progress.emit(80, "Обучение модели...")
             model = trainer.train_model(
-                corpus, vector_size=self.vector_size, epochs=self.epochs
+                corpus,
+                vector_size=self.vector_size,
+                epochs=self.epochs,
+                dm=self.dm,
+                negative=self.negative,
             )
 
             if model:
                 # Вычисляем общее время включая обработку документов
                 training_time = time.time() - start_time
-                trainer.training_metadata["training_time_formatted"] = (
-                    f"{training_time:.1f}с ({training_time / 60:.1f}м)"
-                )
-                trainer.training_metadata["training_date"] = time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
-                )
-                trainer.training_metadata["corpus_size"] = len(processed_docs)
+
+                # Сохраняем метаданные обучения
+                trainer.training_metadata = {
+                    "training_time_formatted": f"{training_time:.1f}с ({training_time / 60:.1f}м)",
+                    "training_date": time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
+                    ),
+                    "corpus_size": len(processed_docs),
+                    "documents_base_path": str(self.documents_path.absolute()),
+                    "vector_size": self.vector_size,
+                    "epochs": self.epochs,
+                    "dm": self.dm,
+                    "negative": self.negative,
+                    "python_version": sys.version,
+                    "platform": sys.platform,
+                }
+
                 self.progress.emit(90, "Сохранение модели...")
-                trainer.save_model(model, self.model_name)
-                self.progress.emit(100, "Обучение завершено!")
-                self.finished.emit(
-                    True,
-                    f"Модель '{self.model_name}' успешно обучена за {training_time / 60:.1f} минут",
-                )
+                success = trainer.save_model(model, self.model_name)
+
+                if success:
+                    self.progress.emit(100, "Обучение завершено!")
+                    self.finished.emit(
+                        True,
+                        f"Модель '{self.model_name}' успешно обучена за {training_time / 60:.1f} минут",
+                    )
+                else:
+                    self.finished.emit(False, "Ошибка при сохранении модели")
             else:
                 self.finished.emit(False, "Ошибка при обучении модели")
 
         except Exception as e:
-            logger.error(f"Ошибка в потоке обучения: {e}")
+            logger.error(f"Ошибка в потоке обучения: {e}", exc_info=True)
             self.finished.emit(False, f"Ошибка: {str(e)}")
 
     def cancel(self):
@@ -368,7 +389,7 @@ class MainWindow(QMainWindow):
         self.document_viewer.setReadOnly(True)
         splitter.addWidget(self.document_viewer)
 
-        splitter.setSizes([600, 400])
+        splitter.setSizes([400, 600])
         layout.addWidget(splitter)
 
         self.tab_widget.addTab(search_widget, "🔍 Поиск")
@@ -600,7 +621,14 @@ class MainWindow(QMainWindow):
 
             if model:
                 self.current_model = model
-                self.search_engine = SemanticSearchEngine(model, trainer.corpus_info)
+
+                # Создаем SearchEngine с базовым путем
+                self.search_engine = SemanticSearchEngine(
+                    model,
+                    trainer.corpus_info,
+                    trainer.documents_base_path,  # Передаем базовый путь
+                )
+
                 self.summarizer = TextSummarizer(model)
 
                 # Передаем данные в evaluation widget
@@ -608,10 +636,28 @@ class MainWindow(QMainWindow):
                     self.evaluation_widget.set_search_engine(
                         self.search_engine, trainer.corpus_info
                     )
-                self.model_status_label.setText(f"Модель '{model_name}' загружена")
+
+                # Обновляем статус
+                status_text = f"Модель '{model_name}' загружена"
+                if trainer.documents_base_path:
+                    status_text += f" (база: {trainer.documents_base_path.name})"
+
+                self.model_status_label.setText(status_text)
                 self.model_status_label.setStyleSheet("color: green;")
 
                 self.status_bar.showMessage(f"Модель '{model_name}' успешно загружена")
+
+                # Логирование для отладки
+                if trainer.documents_base_path:
+                    logger.info(
+                        f"Базовый путь документов: {trainer.documents_base_path}"
+                    )
+                    logger.info(
+                        f"Путь существует: {trainer.documents_base_path.exists()}"
+                    )
+                else:
+                    logger.warning("Базовый путь документов не загружен из модели")
+
             else:
                 logger.error(f"Модель {model_name} не может быть загружена")
                 self.current_model = None
@@ -627,7 +673,7 @@ class MainWindow(QMainWindow):
                     self, "Ошибка", f"Не удалось загрузить модель '{model_name}'"
                 )
         except Exception as e:
-            logger.error(f"Исключение при загрузке модели: {e}")
+            logger.error(f"Исключение при загрузке модели: {e}", exc_info=True)
             QMessageBox.critical(
                 self, "Ошибка", f"Ошибка при загрузке модели: {str(e)}"
             )
@@ -809,58 +855,127 @@ class MainWindow(QMainWindow):
         result = item.data(Qt.ItemDataRole.UserRole)
 
         try:
-            # Получаем полный путь из метаданных
-            if result.metadata and "full_path" in result.metadata:
-                file_path = Path(result.metadata["full_path"])
+            # Получаем относительный путь из результата
+            relative_path = result.doc_id
 
-                if file_path.exists():
-                    extractor = FileExtractor()
-                    text = extractor.extract_text(file_path)
+            logger.info(f"Выбран документ: {relative_path}")
 
-                    if text:
-                        # Показываем первые 5000 символов
-                        preview = text[:5000]
-                        if len(text) > 5000:
-                            preview += "\n\n... (текст обрезан для предпросмотра) ..."
+            file_path = None
 
-                        self.document_viewer.setPlainText(preview)
+            # Основной способ: используем базовый путь из SearchEngine
+            if (
+                self.search_engine
+                and hasattr(self.search_engine, "documents_base_path")
+                and self.search_engine.documents_base_path
+            ):
+                # Строим полный путь: базовый путь + относительный путь
+                file_path = self.search_engine.documents_base_path / relative_path
 
-                        # Добавляем метаданные
-                        metadata_text = "\n\n" + "=" * 50 + "\n"
-                        metadata_text += "📊 МЕТАДАННЫЕ ДОКУМЕНТА\n"
-                        metadata_text += "=" * 50 + "\n"
-                        metadata_text += f"📄 Файл: {result.doc_id}\n"
-                        metadata_text += f"📍 Полный путь: {file_path}\n"
-                        metadata_text += f"🎯 Схожесть: {result.similarity:.3f}\n"
+                logger.info(f"Базовый путь: {self.search_engine.documents_base_path}")
+                logger.info(f"Полный путь: {file_path}")
+                logger.info(f"Файл существует: {file_path.exists()}")
 
-                        if result.metadata:
-                            file_size = result.metadata.get("file_size", 0)
-                            if file_size > 0:
-                                size_mb = file_size / 1024 / 1024
-                                metadata_text += f"💾 Размер: {size_mb:.2f} МБ\n"
-                            metadata_text += f"📝 Токенов: {result.metadata.get('tokens_count', 0):,}\n"
+                # Если файл не найден, пробуем с нормализацией слешей
+                if not file_path.exists():
+                    # Нормализуем слеши для текущей ОС
+                    normalized_relative = relative_path.replace("/", os.sep).replace(
+                        "\\", os.sep
+                    )
+                    file_path = (
+                        self.search_engine.documents_base_path / normalized_relative
+                    )
 
-                        self.document_viewer.append(metadata_text)
-                    else:
-                        self.document_viewer.setPlainText(
-                            f"❌ Не удалось извлечь текст из документа:\n{file_path}"
+                    if file_path.exists():
+                        logger.info("Файл найден после нормализации путей")
+            else:
+                logger.warning("Базовый путь не доступен в SearchEngine")
+
+            # Запасной вариант: проверяем полный путь из метаданных
+            if (
+                (not file_path or not file_path.exists())
+                and result.metadata
+                and "full_path" in result.metadata
+            ):
+                test_path = Path(result.metadata["full_path"])
+                if test_path.exists():
+                    file_path = test_path
+                    logger.info(f"Использован full_path из метаданных: {file_path}")
+
+            # Отображение результата
+            if file_path and file_path.exists():
+                extractor = FileExtractor()
+                text = extractor.extract_text(file_path)
+
+                if text:
+                    # Показываем первые 5000 символов
+                    preview = text[:5000]
+                    if len(text) > 5000:
+                        preview += "\n\n... (текст обрезан) ..."
+
+                    self.document_viewer.setPlainText(preview)
+
+                    # Добавляем метаданные
+                    metadata_text = "\n\n" + "=" * 60 + "\n"
+                    metadata_text += "ИНФОРМАЦИЯ О ДОКУМЕНТЕ\n"
+                    metadata_text += "=" * 60 + "\n"
+                    metadata_text += f"📄 Документ: {relative_path}\n"
+                    metadata_text += f"📁 Полный путь: {file_path}\n"
+                    metadata_text += f"📊 Схожесть: {result.similarity:.3f}\n"
+
+                    if self.search_engine and self.search_engine.documents_base_path:
+                        metadata_text += f"📂 Базовая папка модели: {self.search_engine.documents_base_path}\n"
+
+                    if result.metadata:
+                        metadata_text += (
+                            f"💾 Размер: {result.metadata.get('file_size', 0):,} байт\n"
                         )
+                        metadata_text += (
+                            f"📝 Токенов: {result.metadata.get('tokens_count', 0):,}\n"
+                        )
+                        metadata_text += f"📑 Расширение: {result.metadata.get('extension', 'н/д')}\n"
+
+                    self.document_viewer.append(metadata_text)
                 else:
                     self.document_viewer.setPlainText(
-                        f"❌ Файл не найден по сохраненному пути:\n{file_path}\n\n"
-                        f"Файл мог быть перемещен или удален после обучения модели."
+                        f"❌ Не удалось извлечь текст из документа:\n{file_path}\n\n"
+                        f"Возможно, файл поврежден или имеет неподдерживаемый формат."
                     )
             else:
-                self.document_viewer.setPlainText(
-                    f"❌ В метаданных отсутствует информация о полном пути файла.\n"
-                    f"Документ: {result.doc_id}\n\n"
-                    f"Необходимо переобучить модель для сохранения путей к файлам."
-                )
+                # Подробное сообщение об ошибке
+                error_msg = "❌ ФАЙЛ НЕ НАЙДЕН\n\n"
+                error_msg += f"Искомый документ: {relative_path}\n\n"
+
+                if self.search_engine and hasattr(
+                    self.search_engine, "documents_base_path"
+                ):
+                    if self.search_engine.documents_base_path:
+                        error_msg += f"Базовая папка модели: {self.search_engine.documents_base_path}\n"
+                        error_msg += f"Ожидаемый путь: {self.search_engine.documents_base_path / relative_path}\n"
+                        error_msg += f"Базовая папка существует: {'✅ Да' if self.search_engine.documents_base_path.exists() else '❌ Нет'}\n"
+                    else:
+                        error_msg += "⚠️ Базовый путь не сохранен в модели\n"
+
+                error_msg += "\n📋 Возможные причины:\n"
+                error_msg += "1. Файлы были перемещены после обучения модели\n"
+                error_msg += "2. Модель была обучена на другом компьютере\n"
+                error_msg += "3. Изменилась структура папок\n"
+
+                if not (self.search_engine and self.search_engine.documents_base_path):
+                    error_msg += "4. Модель была обучена старой версией программы без сохранения базового пути\n"
+
+                error_msg += "\n💡 Рекомендации:\n"
+                error_msg += "• Переобучите модель с текущим расположением документов\n"
+                error_msg += "• Или переместите документы в исходное расположение\n"
+
+                self.document_viewer.setPlainText(error_msg)
 
         except Exception as e:
-            logger.error(f"Ошибка при отображении документа: {e}")
+            logger.error(f"Ошибка при отображении документа: {e}", exc_info=True)
             self.document_viewer.setPlainText(
-                f"❌ Ошибка при загрузке документа:\n{str(e)}"
+                f"❌ ОШИБКА ПРИ ЗАГРУЗКЕ ДОКУМЕНТА\n\n"
+                f"Документ: {result.doc_id}\n"
+                f"Ошибка: {str(e)}\n\n"
+                f"Проверьте логи для подробной информации."
             )
 
     def create_summary(self):

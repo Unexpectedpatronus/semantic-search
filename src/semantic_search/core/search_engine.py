@@ -32,13 +32,16 @@ class SemanticSearchEngine:
     """Класс для семантического поиска по документам"""
 
     def __init__(
-        self, model: Optional[Doc2Vec] = None, corpus_info: Optional[List] = None
+        self,
+        model: Optional[Doc2Vec] = None,
+        corpus_info: Optional[List] = None,
+        documents_base_path: Optional[Path] = None,
     ):
         self.model = model
         self.corpus_info = corpus_info or []
+        self.documents_base_path = documents_base_path  # Сохраняем базовый путь
         self.text_processor = TextProcessor()
         self.config = SEARCH_CONFIG
-
         self.cache_manager = CacheManager(CACHE_DIR)
 
         # Создаем индекс метаданных для быстрого доступа
@@ -47,13 +50,24 @@ class SemanticSearchEngine:
             for tokens, doc_id, metadata in self.corpus_info:
                 self._metadata_index[doc_id] = metadata
 
-    def set_model(self, model: Doc2Vec, corpus_info: Optional[List] = None):
+        if self.documents_base_path:
+            logger.info(
+                f"SearchEngine инициализирован с базовым путем: {self.documents_base_path}"
+            )
+
+    def set_model(
+        self,
+        model: Doc2Vec,
+        corpus_info: Optional[List] = None,
+        documents_base_path: Optional[Path] = None,
+    ):
         """
         Установка модели для поиска
 
         Args:
             model: Обученная модель Doc2Vec
             corpus_info: Информация о корпусе
+            documents_base_path: Базовый путь документов
         """
         self.model = model
         if corpus_info:
@@ -61,6 +75,10 @@ class SemanticSearchEngine:
             self._metadata_index = dict()
             for tokens, doc_id, metadata in corpus_info:
                 self._metadata_index[doc_id] = metadata
+
+        if documents_base_path:
+            self.documents_base_path = documents_base_path
+            logger.info(f"Установлен базовый путь: {self.documents_base_path}")
 
         logger.info("Поисковая модель установлена")
 
