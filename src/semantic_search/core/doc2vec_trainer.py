@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 import pickle
-import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -28,7 +28,6 @@ class Doc2VecTrainer:
         self.model: Optional[Doc2Vec] = None
         self.config = DOC2VEC_CONFIG
         self.corpus_info: Optional[List[Tuple[List[str], str, dict]]] = None
-        self.training_time: Optional[float] = None
         self.training_metadata: Dict[str, Any] = {}
 
     def create_tagged_documents(
@@ -46,12 +45,39 @@ class Doc2VecTrainer:
         if not GENSIM_AVAILABLE:
             raise ImportError("Gensim не доступен")
 
-        tagged_docs = []
-        for tokens, doc_id, metadata in corpus:
-            tagged_docs.append(TaggedDocument(words=tokens, tags=[doc_id]))
-
+        tagged_docs = [
+            TaggedDocument(words=tokens, tags=[doc_id]) for tokens, doc_id, _ in corpus
+        ]
         logger.info(f"Создано {len(tagged_docs)} TaggedDocument объектов")
         return tagged_docs
+
+    def _get_training_params(
+        self,
+        vector_size: Optional[int],
+        window: Optional[int],
+        min_count: Optional[int],
+        epochs: Optional[int],
+        workers: Optional[int],
+        dm: Optional[int],
+        negative: Optional[int],
+        hs: Optional[int],
+        sample: Optional[float],
+    ) -> Dict[str, Any]:
+        """Получить параметры для обучения"""
+        return {
+            "vector_size": vector_size or self.config["vector_size"],
+            "window": window or self.config["window"],
+            "min_count": min_count or self.config["min_count"],
+            "epochs": epochs or self.config["epochs"],
+            "workers": workers or self.config["workers"],
+            "seed": self.config["seed"],
+            "dm": dm if dm is not None else self.config.get("dm", 1),
+            "negative": negative
+            if negative is not None
+            else self.config.get("negative", 5),
+            "hs": hs if hs is not None else self.config.get("hs", 0),
+            "sample": sample if sample is not None else self.config.get("sample", 1e-4),
+        }
 
     def _train_standard(
         self,
@@ -87,57 +113,28 @@ class Doc2VecTrainer:
         if not GENSIM_AVAILABLE:
             logger.error("Gensim не доступен для обучения модели")
             return None
-
         if not corpus:
             logger.error("Корпус пуст, обучение невозможно")
             return None
 
-        start_time = time.time()
-
-        # Используем параметры из config или переданные
-        params = {
-            "vector_size": vector_size or self.config["vector_size"],
-            "window": window or self.config["window"],
-            "min_count": min_count or self.config["min_count"],
-            "epochs": epochs or self.config["epochs"],
-            "workers": workers or self.config["workers"],
-            "seed": self.config["seed"],
-            "dm": dm if dm is not None else self.config.get("dm", 1),
-            "negative": negative
-            if negative is not None
-            else self.config.get("negative", 5),
-            "hs": hs if hs is not None else self.config.get("hs", 0),
-            "sample": sample if sample is not None else self.config.get("sample", 1e-4),
-        }
+        params = self._get_training_params(
+            vector_size, window, min_count, epochs, workers, dm, negative, hs, sample
+        )
 
         logger.info("Подготовка данных для обучения...")
         tagged_docs = self.create_tagged_documents(corpus)
 
         logger.info("Начинаем обучение модели Doc2Vec с параметрами:")
-        for key, value in params.items():
-            logger.info(f"  {key}: {value}")
+        for k, v in params.items():
+            logger.info(f"  {k}: {v}")
 
         try:
-            # Создаем и обучаем модель
             model = Doc2Vec(tagged_docs, **params)
-
-            self.training_time = time.time() - start_time
-            self.training_metadata = {
-                "training_time": self.training_time,
-                "training_date": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "corpus_size": len(corpus),
-                "parameters": params,
-                "vocabulary_size": len(model.wv.key_to_index),
-                "documents_count": len(model.dv),
-            }
 
             self.model = model
             self.corpus_info = corpus
 
             logger.info("Обучение модели завершено успешно!")
-            logger.info(
-                f"Время обучения: {self.training_time:.2f} секунд ({self.training_time / 60:.1f} минут)"
-            )
             logger.info(
                 f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
             )
@@ -186,59 +183,60 @@ class Doc2VecTrainer:
         if not GENSIM_AVAILABLE:
             logger.error("Gensim не доступен для обучения модели")
             return None
-
         if not corpus:
             logger.error("Корпус пуст, обучение невозможно")
             return None
 
         if len(corpus) > 10000:
+            # Для больших корпусов - поэпоховое обучение
             logger.info("Большой корпус обнаружен. Используем поэпоховое обучение...")
 
+            params = self._get_training_params(
+                vector_size,
+                window,
+                min_count,
+                epochs,
+                workers,
+                dm,
+                negative,
+                hs,
+                sample,
+            )
+
+            logger.info("Подготовка данных для обучения...")
             tagged_docs = self.create_tagged_documents(corpus)
 
-            # Все параметры модели
-            model_params = {
-                "vector_size": vector_size or self.config["vector_size"],
-                "window": window or self.config["window"],
-                "min_count": min_count or self.config["min_count"],
-                "workers": workers or self.config["workers"],
-                "seed": self.config["seed"],
-                "dm": dm if dm is not None else self.config.get("dm", 1),
-                "negative": negative
-                if negative is not None
-                else self.config.get("negative", 5),
-                "hs": hs if hs is not None else self.config.get("hs", 0),
-                "sample": sample
-                if sample is not None
-                else self.config.get("sample", 1e-4),
-            }
-
             logger.info("Создание модели с параметрами:")
-            for key, value in model_params.items():
-                logger.info(f"  {key}: {value}")
+            for k, v in params.items():
+                logger.info(f"  {k}: {v}")
 
-            model = Doc2Vec(**model_params)
+            try:
+                model = Doc2Vec(**params)
+                model.build_vocab(tagged_docs)
+                logger.info(f"Словарь построен: {len(model.wv.key_to_index)} слов")
 
-            model.build_vocab(tagged_docs)
-            logger.info(f"Словарь построен: {len(model.wv.key_to_index)} слов")
+                for epoch in range(params["epochs"]):
+                    logger.info(f"Эпоха {epoch + 1}/{params['epochs']}...")
+                    model.train(
+                        tagged_docs, total_examples=model.corpus_count, epochs=1
+                    )
 
-            training_epochs = epochs or self.config["epochs"]
+                self.model = model
+                self.corpus_info = corpus
 
-            for epoch in range(training_epochs):
-                logger.info(f"Эпоха {epoch + 1}/{training_epochs}...")
-                model.train(tagged_docs, total_examples=model.corpus_count, epochs=1)
+                logger.info("Обучение завершено успешно!")
+                logger.info(
+                    f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
+                )
+                logger.info(f"Обучено векторов документов: {len(model.dv)}")
 
-            self.model = model
-            self.corpus_info = corpus
+                return model
 
-            logger.info("Обучение завершено успешно!")
-            logger.info(
-                f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
-            )
-            logger.info(f"Обучено векторов документов: {len(model.dv)}")
-
-            return model
+            except Exception as e:
+                logger.error(f"Ошибка при обучении модели: {e}")
+                return None
         else:
+            # Для небольших корпусов используем стандартное обучение
             return self._train_standard(
                 corpus,
                 vector_size=vector_size,
@@ -289,6 +287,13 @@ class Doc2VecTrainer:
                     pickle.dump(self.corpus_info, f)
                 logger.info(f"Информация о корпусе сохранена: {corpus_path}")
 
+            # Сохраняем метаданные обучения если они есть
+            if self.training_metadata:
+                metadata_path = MODELS_DIR / f"{model_name}_metadata.json"
+                with open(metadata_path, "w", encoding="utf-8") as f:
+                    json.dump(self.training_metadata, f, indent=2, ensure_ascii=False)
+                logger.info(f"Метаданные обучения сохранены: {metadata_path}")
+
             logger.info(f"Модель сохранена: {model_path}")
             return True
 
@@ -338,6 +343,17 @@ class Doc2VecTrainer:
                     logger.warning(f"Не удалось загрузить информацию о корпусе: {e}")
                     self.corpus_info = []
 
+            # Загружаем метаданные обучения если есть
+            metadata_path = MODELS_DIR / f"{model_name}_metadata.json"
+            if metadata_path.exists():
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        self.training_metadata = json.load(f)
+                    logger.info("Метаданные обучения загружены")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить метаданные обучения: {e}")
+                    self.training_metadata = {}
+
             logger.info(f"Модель загружена: {model_path}")
             logger.info(f"Векторов документов: {len(model.dv)}")
             logger.info(f"Размерность векторов: {model.vector_size}")
@@ -358,7 +374,7 @@ class Doc2VecTrainer:
         if self.model is None:
             return {"status": "no_model"}
 
-        return {
+        info = {
             "status": "loaded",
             "vector_size": self.model.vector_size,
             "vocabulary_size": len(self.model.wv.key_to_index),
@@ -374,3 +390,13 @@ class Doc2VecTrainer:
             "sample": self.model.sample,
             "workers": self.model.workers,
         }
+
+        info["training_time_formatted"] = self.training_metadata.get(
+            "training_time_formatted", "Неизвестно"
+        )
+
+        info["training_date"] = self.training_metadata.get(
+            "training_date", "Неизвестно"
+        )
+
+        return info

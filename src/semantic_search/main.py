@@ -138,6 +138,9 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
     def train_task(progress_tracker=None):
         """Задача обучения модели"""
 
+        # Начинаем отсчет общего времени
+        start_time = time.time()
+
         with performance_monitor.measure_operation("document_processing"):
             # Обработка документов
             processor = DocumentProcessor()
@@ -171,63 +174,27 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
             # Обучение модели
             trainer = Doc2VecTrainer()
 
-            # Создаем модель с прогресс трекингом
-            class ProgressDoc2Vec:
-                def __init__(self, trainer, progress_tracker):
-                    self.trainer = trainer
-                    self.progress_tracker = progress_tracker
-
-                def train_with_progress(self, corpus, **kwargs):
-                    """Обучение с отслеживанием прогресса"""
-
-                    # Создаем tagged documents
-                    tagged_docs = self.trainer.create_tagged_documents(corpus)
-
-                    from gensim.models.doc2vec import Doc2Vec
-
-                    model = Doc2Vec(
-                        vector_size=kwargs.get("vector_size", 150),
-                        window=kwargs.get("window", 10),
-                        min_count=kwargs.get("min_count", 2),
-                        workers=kwargs.get("workers", 4),
-                        seed=42,
-                    )
-
-                    # Построение словаря
-                    model.build_vocab(tagged_docs)
-
-                    if self.progress_tracker:
-                        self.progress_tracker.update(
-                            message="Словарь построен, начинаем обучение..."
-                        )
-
-                    # Обучение по эпохам
-                    for epoch in range(kwargs.get("epochs", 40)):
-                        model.train(
-                            tagged_docs, total_examples=model.corpus_count, epochs=1
-                        )
-
-                        if self.progress_tracker:
-                            progress_step = len(processed_docs) + epoch + 1
-                            self.progress_tracker.update(
-                                progress_step,
-                                f"Эпоха {epoch + 1}/{kwargs.get('epochs', 40)}",
-                            )
-
-                    return model
-
-            progress_trainer = ProgressDoc2Vec(trainer, progress_tracker)
-            trained_model = progress_trainer.train_with_progress(
+            # Обучение модели
+            trained_model = trainer.train_model(
                 corpus, vector_size=vector_size, epochs=epochs
             )
 
             if trained_model:
-                trainer.model = trained_model
-                trainer.corpus_info = corpus
+                # Вычисляем общее время
+                training_time = time.time() - start_time
+                trainer.training_metadata["training_time_formatted"] = (
+                    f"{training_time:.1f}с ({training_time / 60:.2f}м)"
+                )
+                trainer.training_metadata["training_date"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
+                )
+                trainer.training_metadata["corpus_size"] = len(processed_docs)
                 trainer.save_model(trained_model, model)
 
                 if progress_tracker:
-                    progress_tracker.finish("Модель обучена и сохранена")
+                    progress_tracker.finish(
+                        f"Модель обучена за {training_time / 60:.1f} минут"
+                    )
 
                 # Возвращаем статистику
                 stats = calculate_statistics_from_processed_docs(processed_docs)
@@ -235,6 +202,7 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
                     "model_saved": True,
                     "documents_processed": len(processed_docs),
                     "vocabulary_size": len(trained_model.wv.key_to_index),
+                    "training_time": training_time,
                     "statistics": stats,
                 }
             else:

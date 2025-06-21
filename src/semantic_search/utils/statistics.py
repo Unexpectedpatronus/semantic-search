@@ -136,4 +136,28 @@ def calculate_model_statistics(model_info: Dict[str, Any]) -> str:
         f"🔄 Количество эпох обучения: {model_info['epochs']}",
     ]
 
+    # Добавляем информацию о времени обучения
+    if "training_time_formatted" in model_info:
+        lines.append(f"⏱️ Время обучения: {model_info['training_time_formatted']}")
+
+    if "training_date" in model_info:
+        lines.append(f"📅 Дата обучения: {model_info['training_date']}")
+
+    if "corpus_size" in model_info and model_info["corpus_size"] > 0:
+        lines.append(
+            f"📑 Размер корпуса при обучении: {model_info['corpus_size']} документов"
+        )
+
+    # Режим обучения
+    if model_info.get("dm") == 1:
+        lines.append("🔧 Режим: Distributed Memory (DM)")
+    else:
+        lines.append("🔧 Режим: Distributed Bag of Words (DBOW)")
+
+    # Дополнительные параметры
+    if model_info.get("negative", 0) > 0:
+        lines.append(f"➖ Negative sampling: {model_info['negative']}")
+    if model_info.get("hs") == 1:
+        lines.append("🌳 Hierarchical Softmax: включен")
+
     return "\n".join(lines)

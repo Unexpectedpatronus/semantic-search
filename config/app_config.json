@@ -8,7 +8,7 @@
     "remove_stop_words": true,
     "lemmatize": true,
     "max_file_size_mb": 100,
-    "chunk_size": 500000,
+    "chunk_size": 800000,
     "spacy_max_length": 3000000
   },
   "doc2vec": {

@@ -1,5 +1,7 @@
 """Главное окно приложения"""
 
+import json
+import time
 from pathlib import Path
 from typing import List
 
@@ -42,6 +44,8 @@ from semantic_search.utils.statistics import (
     format_statistics_for_display,
 )
 
+"""Исправленный класс TrainingThread для правильного подсчета времени"""
+
 
 class TrainingThread(QThread):
     """Поток для обучения модели"""
@@ -71,6 +75,9 @@ class TrainingThread(QThread):
     def run(self):
         """Выполнение обучения"""
         try:
+            # Начинаем отсчет общего времени
+            start_time = time.time()
+
             # Обработка документов
             processor = DocumentProcessor()
             processed_docs = []
@@ -113,21 +120,30 @@ class TrainingThread(QThread):
             stats = calculate_statistics_from_processed_docs(processed_docs)
             self.statistics.emit(stats)
 
-            # Обучение модели
-            # self.progress.emit(50, "Начинаем обучение модели...")
-
             trainer = Doc2VecTrainer()
 
-            # Обучение с отслеживанием прогресса
+            # Обучение модели
             model = trainer.train_model(
                 corpus, vector_size=self.vector_size, epochs=self.epochs
             )
 
             if model:
+                # Вычисляем общее время включая обработку документов
+                training_time = time.time() - start_time
+                trainer.training_metadata["training_time_formatted"] = (
+                    f"{training_time:.1f}с ({training_time / 60:.2f}м)"
+                )
+                trainer.training_metadata["training_date"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
+                )
+                trainer.training_metadata["corpus_size"] = len(processed_docs)
                 self.progress.emit(90, "Сохранение модели...")
                 trainer.save_model(model, self.model_name)
                 self.progress.emit(100, "Обучение завершено!")
-                self.finished.emit(True, f"Модель '{self.model_name}' успешно обучена")
+                self.finished.emit(
+                    True,
+                    f"Модель '{self.model_name}' успешно обучена за {training_time / 60:.1f} минут",
+                )
             else:
                 self.finished.emit(False, "Ошибка при обучении модели")
 
@@ -535,7 +551,7 @@ class MainWindow(QMainWindow):
     def create_evaluation_tab(self):
         """Создание вкладки оценки и сравнения"""
         self.evaluation_widget = EvaluationWidget()
-        self.tab_widget.addTab(self.evaluation_widget, "📊 Оценка методов")
+        self.tab_widget.addTab(self.evaluation_widget, "📚 Оценка методов")
 
     def load_models(self):
         """Загрузка списка доступных моделей"""
@@ -983,30 +999,91 @@ class MainWindow(QMainWindow):
         # Статистика моделей
         stats_text += "🧠 МОДЕЛИ:\n"
         model_files = list(MODELS_DIR.glob("*.model"))
-        stats_text += f"Всего моделей: {len(model_files)}\n"
+        stats_text += f"Всего моделей: {len(model_files)}\n\n"
+
+        # Получаем имя текущей модели
+        current_model_name = (
+            self.model_combo.currentText() if hasattr(self, "model_combo") else None
+        )
+        is_current_model_shown = False
 
         for model_file in model_files:
-            stats_text += f"  - {model_file.stem} ({model_file.stat().st_size / 1024 / 1024:.1f} МБ)\n"
+            model_name = model_file.stem
+            file_size_mb = model_file.stat().st_size / 1024 / 1024
 
-        stats_text += "\n"
+            # Проверяем, является ли это текущей моделью
+            is_current = (
+                current_model_name == model_name and self.current_model is not None
+            )
 
-        # Статистика текущей модели
-        if self.current_model:
-            stats_text += "📍 ТЕКУЩАЯ МОДЕЛЬ:\n"
-            trainer = Doc2VecTrainer()
-            trainer.model = self.current_model
-            model_info = trainer.get_model_info()
+            if is_current:
+                is_current_model_shown = True
+                stats_text += f"📍 ТЕКУЩАЯ МОДЕЛЬ: {model_name}\n"
+            else:
+                stats_text += f"📁 {model_name}:\n"
 
-            stats_text += f"Размерность векторов: {model_info['vector_size']}\n"
-            stats_text += f"Размер словаря: {model_info['vocabulary_size']:,} слов\n"
-            stats_text += f"Документов в модели: {model_info['documents_count']}\n"
-            stats_text += f"Размер окна: {model_info['window']}\n"
-            stats_text += f"Минимальная частота: {model_info['min_count']}\n"
-            stats_text += f"Эпох обучения: {model_info['epochs']}\n"
-        else:
-            stats_text += "❌ Модель не загружена\n"
+            stats_text += f"   Размер файла: {file_size_mb:.1f} МБ\n"
 
-        stats_text += "\n"
+            # Пытаемся загрузить метаданные модели
+            metadata_file = MODELS_DIR / f"{model_name}_metadata.json"
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+
+                    # Показываем только базовую информацию для не-текущих моделей
+                    if not is_current:
+                        training_time = metadata.get(
+                            "training_time_formatted", "Неизвестно"
+                        )
+                        training_date = metadata.get("training_date", "Неизвестно")
+                        corpus_size = metadata.get("corpus_size", 0)
+                        stats_text += f"   Дата обучения: {training_date}\n"
+                        stats_text += f"   Время обучения: {training_time}\n"
+                        stats_text += f"   Размер корпуса при обучении: {corpus_size}\n"
+
+                    else:
+                        # Для текущей модели показываем подробную информацию
+                        trainer = Doc2VecTrainer()
+                        trainer.model = self.current_model
+                        trainer.training_metadata = metadata
+
+                        model_info = trainer.get_model_info()
+
+                        stats_text += (
+                            f"   Размерность векторов: {model_info['vector_size']}\n"
+                        )
+                        stats_text += f"   Размер словаря: {model_info['vocabulary_size']:,} слов\n"
+                        stats_text += (
+                            f"   Документов в модели: {model_info['documents_count']}\n"
+                        )
+                        stats_text += f"   Размер окна: {model_info['window']}\n"
+                        stats_text += (
+                            f"   Минимальная частота: {model_info['min_count']}\n"
+                        )
+                        stats_text += f"   Эпох обучения: {model_info['epochs']}\n"
+
+                        stats_text += f"   Время обучения: {model_info['training_time_formatted']}\n"
+                        stats_text += (
+                            f"   Дата обучения: {model_info['training_date']}\n"
+                        )
+
+                        # Режим обучения
+                        if model_info["dm"] == 1:
+                            stats_text += "   Режим: Distributed Memory (DM)\n"
+                        else:
+                            stats_text += "   Режим: Distributed Bag of Words (DBOW)\n"
+
+                except Exception as e:
+                    logger.debug(
+                        f"Не удалось загрузить метаданные для {model_name}: {e}"
+                    )
+
+            stats_text += "\n"
+
+        # Если текущая модель не была показана в списке (не загружена правильно)
+        if self.current_model and not is_current_model_shown:
+            stats_text += "⚠️ Текущая модель загружена, но метаданные недоступны\n\n"
 
         # Системная информация
         try:
@@ -1017,7 +1094,8 @@ class MainWindow(QMainWindow):
             stats_text += f"Память: {psutil.virtual_memory().percent}% использовано\n"
             stats_text += f"Свободно памяти: {psutil.virtual_memory().available / 1024 / 1024 / 1024:.1f} ГБ\n"
         except ImportError:
-            pass
+            stats_text += "\n💻 СИСТЕМА:\n"
+            stats_text += "Установите psutil для отображения системной информации\n"
 
         self.statistics_text.setPlainText(stats_text)
 

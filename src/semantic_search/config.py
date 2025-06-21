@@ -65,7 +65,7 @@ class AppConfig:
                 "remove_stop_words": True,
                 "lemmatize": True,
                 "max_file_size_mb": 100,  # Увеличено до 100MB
-                "chunk_size": 500_000,  # Для больших файлов
+                "chunk_size": 800_000,  # Для больших файлов
                 "spacy_max_length": 3_000_000,  # Лимит SpaCy
             }
 
