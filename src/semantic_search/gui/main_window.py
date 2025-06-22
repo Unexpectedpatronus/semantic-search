@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -134,23 +135,37 @@ class TrainingThread(QThread):
 
             logger.info(f"Языковой состав: {language_info}")
 
+            # Адаптация параметров на основе языкового состава
+            adapted_params = self._adapt_params_for_language(language_info)
+
+            # Применяем адаптированные параметры
+            final_vector_size = adapted_params.get("vector_size", self.vector_size)
+            final_window = adapted_params.get("window", self.window)
+            final_min_count = adapted_params.get("min_count", self.min_count)
+
+            if adapted_params:
+                self.progress.emit(
+                    48, "Параметры адаптированы для многоязычного корпуса"
+                )
+                logger.info(f"Адаптированные параметры: {adapted_params}")
+
             trainer = Doc2VecTrainer()
 
-            # Обучение модели с новыми параметрами
+            # Обучение модели с адаптированными параметрами
             self.progress.emit(
                 50,
-                f"Обучение модели (векторы: {self.vector_size}, эпохи: {self.epochs})...",
+                f"Обучение модели (векторы: {final_vector_size}, окно: {final_window})...",
             )
 
             model = trainer.train_model(
                 corpus,
-                vector_size=self.vector_size,
+                vector_size=final_vector_size,  # Используем адаптированное значение
                 epochs=self.epochs,
-                window=self.window,
-                min_count=self.min_count,
+                window=final_window,  # Используем адаптированное значение
+                min_count=final_min_count,  # Используем адаптированное значение
                 dm=self.dm,
                 negative=self.negative,
-                sample=1e-5,  # Оптимизировано для технических терминов
+                sample=1e-5,
                 preset=self.preset,
             )
 
@@ -230,6 +245,53 @@ class TrainingThread(QThread):
             "mixed": int(language_stats["mixed"] * scale_factor),
             "total": len(corpus),
         }
+
+    def _adapt_params_for_language(self, language_info: dict) -> dict:
+        """
+        Адаптация параметров обучения на основе языкового состава
+
+        Args:
+            language_info: Статистика языков в корпусе
+
+        Returns:
+            Адаптированные параметры
+        """
+        total = language_info["total"]
+        if total == 0:
+            return {}
+
+        # Вычисляем процентное соотношение
+        russian_pct = language_info["russian"] / total
+        english_pct = language_info["english"] / total
+        mixed_pct = language_info["mixed"] / total
+
+        adapted_params = {}
+
+        # Адаптация размерности векторов
+        if mixed_pct > 0.3 or (russian_pct > 0.2 and english_pct > 0.2):
+            # Много смешанных документов или оба языка представлены значительно
+            adapted_params["vector_size"] = min(400, self.vector_size + 50)
+            logger.info(
+                f"Увеличена размерность векторов до {adapted_params['vector_size']} для многоязычного корпуса"
+            )
+
+        # Адаптация размера окна
+        if english_pct > 0.5:
+            # Английские тексты часто имеют более короткие предложения
+            adapted_params["window"] = max(10, self.window - 2)
+        elif mixed_pct > 0.3:
+            # Смешанные тексты требуют большего контекста
+            adapted_params["window"] = min(20, self.window + 3)
+
+        # Адаптация минимальной частоты
+        if total < 100:
+            # Маленький корпус - снижаем порог
+            adapted_params["min_count"] = max(1, self.min_count - 1)
+        elif mixed_pct > 0.3:
+            # Смешанный корпус - повышаем порог для фильтрации шума
+            adapted_params["min_count"] = self.min_count + 1
+
+        return adapted_params
 
     def cancel(self):
         """Отмена обучения"""
@@ -646,40 +708,174 @@ class MainWindow(QMainWindow):
         layout.addWidget(file_group)
 
         # Параметры суммаризации
-        params_layout = QHBoxLayout()
-        params_layout.addWidget(QLabel("Количество предложений:"))
+        params_group = QGroupBox("Параметры выжимки")
+        params_layout = QVBoxLayout()
+
+        # Количество предложений
+        sentences_layout = QHBoxLayout()
+        sentences_layout.addWidget(QLabel("Количество предложений:"))
 
         self.sentences_spin = QSpinBox()
         self.sentences_spin.setMinimum(1)
         self.sentences_spin.setMaximum(20)
         self.sentences_spin.setValue(5)
-        params_layout.addWidget(self.sentences_spin)
+        self.sentences_spin.setToolTip("Количество предложений в выжимке")
+        sentences_layout.addWidget(self.sentences_spin)
 
+        sentences_layout.addStretch()
+        params_layout.addLayout(sentences_layout)
+
+        # Минимальная длина предложения
+        min_length_layout = QHBoxLayout()
+        min_length_layout.addWidget(QLabel("Минимальная длина предложения:"))
+
+        self.min_sentence_length_spin = QSpinBox()
+        self.min_sentence_length_spin.setMinimum(10)
+        self.min_sentence_length_spin.setMaximum(100)
+        self.min_sentence_length_spin.setValue(15)
+        self.min_sentence_length_spin.setSuffix(" символов")
+        self.min_sentence_length_spin.setToolTip(
+            "Предложения короче этого значения не будут включены в выжимку"
+        )
+        min_length_layout.addWidget(self.min_sentence_length_spin)
+
+        min_length_layout.addStretch()
+        params_layout.addLayout(min_length_layout)
+
+        # Минимальное количество слов
+        min_words_layout = QHBoxLayout()
+        min_words_layout.addWidget(QLabel("Минимум слов в предложении:"))
+
+        self.min_words_spin = QSpinBox()
+        self.min_words_spin.setMinimum(3)
+        self.min_words_spin.setMaximum(20)
+        self.min_words_spin.setValue(5)
+        self.min_words_spin.setToolTip(
+            "Предложения с меньшим количеством слов будут отфильтрованы"
+        )
+        min_words_layout.addWidget(self.min_words_spin)
+
+        min_words_layout.addStretch()
+        params_layout.addLayout(min_words_layout)
+
+        # Флажок для фильтрации
+        self.filter_short_checkbox = QCheckBox(
+            "Фильтровать короткие и малоинформативные предложения"
+        )
+        self.filter_short_checkbox.setChecked(True)
+        self.filter_short_checkbox.toggled.connect(self.on_filter_toggled)
+        params_layout.addWidget(self.filter_short_checkbox)
+
+        params_group.setLayout(params_layout)
+        layout.addWidget(params_group)
+
+        # Кнопка создания выжимки
+        button_layout = QHBoxLayout()
         self.summarize_button = QPushButton("Создать выжимку")
         self.summarize_button.clicked.connect(self.create_summary)
-        params_layout.addWidget(self.summarize_button)
+        button_layout.addWidget(self.summarize_button)
 
-        params_layout.addStretch()
-        layout.addLayout(params_layout)
+        # Кнопка сохранения выжимки
+        self.save_summary_button = QPushButton("Сохранить выжимку")
+        self.save_summary_button.clicked.connect(self.save_summary)
+        self.save_summary_button.setEnabled(False)
+        button_layout.addWidget(self.save_summary_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
 
         # Результат
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         # Оригинальный текст
+        original_group = QGroupBox("Оригинальный текст")
+        original_layout = QVBoxLayout()
         self.original_text = QTextEdit()
         self.original_text.setReadOnly(True)
-        splitter.addWidget(QLabel("Оригинальный текст:"))
-        splitter.addWidget(self.original_text)
+        original_layout.addWidget(self.original_text)
+        original_group.setLayout(original_layout)
+        splitter.addWidget(original_group)
 
         # Выжимка
+        summary_group = QGroupBox("Выжимка")
+        summary_layout = QVBoxLayout()
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
-        splitter.addWidget(QLabel("Выжимка:"))
-        splitter.addWidget(self.summary_text)
+        summary_layout.addWidget(self.summary_text)
+        summary_group.setLayout(summary_layout)
+        splitter.addWidget(summary_group)
 
         layout.addWidget(splitter)
 
         self.tab_widget.addTab(summary_widget, "📝 Суммаризация")
+
+        # Сохраняем текущую выжимку для возможности сохранения
+        self.current_summary = []
+
+    def on_filter_toggled(self, checked):
+        """Обработчик переключения фильтрации"""
+        self.min_sentence_length_spin.setEnabled(checked)
+        self.min_words_spin.setEnabled(checked)
+
+        if checked:
+            self.status_bar.showMessage("Фильтрация коротких предложений включена")
+        else:
+            self.status_bar.showMessage(
+                "Фильтрация отключена - все предложения будут учитываться"
+            )
+
+    def save_summary(self):
+        """Сохранение выжимки в файл"""
+        if not self.current_summary:
+            QMessageBox.warning(self, "Ошибка", "Нет выжимки для сохранения")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить выжимку", "", "Текстовые файлы (*.txt);;Все файлы (*.*)"
+        )
+
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    # Заголовок
+                    f.write(f"Выжимка документа: {self.summary_file_edit.text()}\n")
+                    f.write(f"Создано: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("=" * 60 + "\n\n")
+
+                    # Предложения выжимки
+                    for i, sentence in enumerate(self.current_summary, 1):
+                        f.write(f"{i}. {sentence.strip()}\n\n")
+
+                    # Статистика если есть
+                    if hasattr(self, "last_summary_stats"):
+                        f.write("\n" + "=" * 60 + "\n")
+                        f.write("СТАТИСТИКА СУММАРИЗАЦИИ\n")
+                        f.write("=" * 60 + "\n")
+                        stats = self.last_summary_stats
+                        f.write(
+                            f"Исходных предложений: {stats['original_sentences_count']}\n"
+                        )
+                        f.write(
+                            f"Валидных предложений: {stats.get('valid_original_sentences_count', 'н/д')}\n"
+                        )
+                        f.write(
+                            f"Предложений в выжимке: {stats['summary_sentences_count']}\n"
+                        )
+                        f.write(
+                            f"Коэффициент сжатия: {stats['compression_ratio']:.1%}\n"
+                        )
+                        f.write(
+                            f"Средняя длина предложения: {stats.get('avg_sentence_length', 0):.1f} слов\n"
+                        )
+
+                QMessageBox.information(
+                    self, "Успех", f"Выжимка сохранена в:\n{file_path}"
+                )
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Ошибка", f"Ошибка при сохранении:\n{str(e)}"
+                )
 
     def create_statistics_tab(self):
         """Создание вкладки статистики"""
@@ -1117,7 +1313,7 @@ class MainWindow(QMainWindow):
             )
 
     def create_summary(self):
-        """Создание выжимки документа"""
+        """Создание выжимки документа с учетом параметров фильтрации"""
         if not self.summarizer:
             QMessageBox.warning(self, "Ошибка", "Сначала загрузите модель")
             return
@@ -1165,6 +1361,17 @@ class MainWindow(QMainWindow):
                 preview += f"\n\n... (показаны первые {preview_length:,} из {text_length:,} символов) ..."
             self.original_text.setPlainText(preview)
 
+            # Обновляем параметры суммаризатора если включена фильтрация
+            if self.filter_short_checkbox.isChecked():
+                self.summarizer.min_summary_sentence_length = (
+                    self.min_sentence_length_spin.value()
+                )
+                self.summarizer.min_words_in_sentence = self.min_words_spin.value()
+            else:
+                # Если фильтрация отключена, устанавливаем минимальные значения
+                self.summarizer.min_summary_sentence_length = 1
+                self.summarizer.min_words_in_sentence = 1
+
             # Создаем выжимку
             self.status_bar.showMessage(
                 "Создание выжимки... Это может занять время для больших файлов"
@@ -1173,27 +1380,53 @@ class MainWindow(QMainWindow):
 
             sentences_count = self.sentences_spin.value()
 
-            # Используем QTimer для асинхронной обработки
+            # Отключаем кнопки на время обработки
             self.summarize_button.setEnabled(False)
+            self.save_summary_button.setEnabled(False)
 
             try:
+                # Создаем выжимку с учетом фильтрации
                 summary = self.summarizer.summarize_text(
-                    text, sentences_count=sentences_count
+                    text,
+                    sentences_count=sentences_count,
+                    min_sentence_length=self.min_sentence_length_spin.value()
+                    if self.filter_short_checkbox.isChecked()
+                    else None,
                 )
 
                 if summary:
+                    # Сохраняем текущую выжимку
+                    self.current_summary = summary
+
                     # Показываем выжимку
                     summary_text = "\n\n".join(
-                        f"{i}. {sent}" for i, sent in enumerate(summary, 1)
+                        f"{i}. {sent.strip()}" for i, sent in enumerate(summary, 1)
                     )
                     self.summary_text.setPlainText(summary_text)
 
                     # Показываем статистику
                     stats = self.summarizer.get_summary_statistics(text, summary)
+                    self.last_summary_stats = (
+                        stats  # Сохраняем для последующего сохранения
+                    )
+
                     stats_text = "\n\n--- Статистика ---\n"
                     stats_text += (
                         f"Исходных предложений: {stats['original_sentences_count']}\n"
                     )
+
+                    # Показываем информацию о фильтрации
+                    if (
+                        self.filter_short_checkbox.isChecked()
+                        and "valid_original_sentences_count" in stats
+                    ):
+                        filtered_count = (
+                            stats["original_sentences_count"]
+                            - stats["valid_original_sentences_count"]
+                        )
+                        stats_text += f"Отфильтровано коротких: {filtered_count}\n"
+                        stats_text += f"Валидных предложений: {stats['valid_original_sentences_count']}\n"
+
                     stats_text += (
                         f"Предложений в выжимке: {stats['summary_sentences_count']}\n"
                     )
@@ -1205,10 +1438,22 @@ class MainWindow(QMainWindow):
                         f"Символов в выжимке: {stats['summary_chars_count']:,}\n"
                     )
 
+                    if "avg_sentence_length" in stats:
+                        stats_text += f"Средняя длина предложения: {stats['avg_sentence_length']:.1f} слов\n"
+
                     self.summary_text.append(stats_text)
-                    self.status_bar.showMessage("Выжимка создана")
+
+                    # Включаем кнопку сохранения
+                    self.save_summary_button.setEnabled(True)
+                    self.status_bar.showMessage("Выжимка создана успешно")
                 else:
-                    QMessageBox.warning(self, "Ошибка", "Не удалось создать выжимку")
+                    QMessageBox.warning(
+                        self,
+                        "Ошибка",
+                        "Не удалось создать выжимку.\n"
+                        "Возможно, все предложения слишком короткие.\n"
+                        "Попробуйте уменьшить минимальную длину предложения.",
+                    )
                     self.status_bar.showMessage("Ошибка создания выжимки")
 
             finally:

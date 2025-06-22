@@ -42,6 +42,9 @@ class AppConfig:
     # Модель Doc2Vec
     doc2vec: Dict[str, Any] = field(default_factory=dict)
 
+    # Альтернативные конфигурации Doc2Vec
+    doc2vec_presets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     # Поиск
     search: Dict[str, Any] = field(default_factory=dict)
 
@@ -67,6 +70,11 @@ class AppConfig:
                 "max_file_size_mb": 100,
                 "chunk_size": 800_000,
                 "spacy_max_length": 3_000_000,
+                # НОВОЕ: Модели SpaCy для разных языков
+                "spacy_models": {
+                    "ru": "ru_core_news_sm",  # Русская модель
+                    "en": "en_core_web_sm",  # Английская модель
+                },
             }
 
         if not self.doc2vec:
@@ -87,6 +95,8 @@ class AppConfig:
                 "alpha": 0.025,  # Начальная скорость обучения
                 "min_alpha": 0.0001,  # Конечная скорость обучения
             }
+
+        if not self.doc2vec_presets:
             # Альтернативные конфигурации
             self.doc2vec_presets = {
                 "fast": {
@@ -143,6 +153,9 @@ class AppConfig:
                 "use_textrank": True,
                 "damping_factor": 0.85,
                 "max_iterations": 100,
+                "filter_short_sentences": True,  # Включить фильтрацию коротких предложений
+                "max_digit_ratio": 0.5,  # Максимальная доля цифр в предложении
+                "min_meaningful_words": 2,  # Минимум значимых слов (длиннее 3 символов)
             }
 
         if not self.performance:
@@ -152,6 +165,11 @@ class AppConfig:
                 "slow_operation_threshold": 5.0,  # секунды
                 "memory_warning_threshold": 80,  # процент
                 "enable_profiling": False,
+                # Новые параметры для управления параллелизмом
+                "task_manager_workers": min(8, multiprocessing.cpu_count()),
+                "cpu_task_manager_workers": max(1, multiprocessing.cpu_count() - 2),
+                "adaptive_workers": True,  # Автоматическая адаптация
+                "min_workers_per_task": 2,  # Минимум воркеров на задачу
             }
 
 
@@ -200,6 +218,7 @@ class ConfigManager:
 
         except Exception as e:
             logger.error(f"Ошибка сохранения конфигурации: {e}")
+            return False
 
     def reload_config(self) -> AppConfig:
         """Принудительная перезагрузка конфигурации"""
@@ -238,9 +257,19 @@ config_manager = ConfigManager()
 
 # Экспортируем для обратной совместимости
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc"}
-SPACY_MODEL = "ru_core_news_sm"
+
+# ОБНОВЛЕНО: Теперь модели SpaCy берутся из конфигурации
+SPACY_MODELS: dict = config_manager.config.text_processing.get(
+    "spacy_models", {"ru": "ru_core_news_sm", "en": "en_core_web_sm"}
+)
+
+# Для обратной совместимости оставляем SPACY_MODEL как русскую модель по умолчанию
+SPACY_MODEL = SPACY_MODELS.get("ru", "ru_core_news_sm")
+
 TEXT_PROCESSING_CONFIG = config_manager.config.text_processing
 DOC2VEC_CONFIG = config_manager.config.doc2vec
+DOC2VEC_PRESETS = config_manager.config.doc2vec_presets
 SEARCH_CONFIG = config_manager.config.search
 GUI_CONFIG = config_manager.config.gui
 SUMMARIZATION_CONFIG = config_manager.config.summarization
+PERFORMANCE_CONFIG = config_manager.config.performance

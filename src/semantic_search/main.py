@@ -39,16 +39,33 @@ def main():
 
         # Проверка SpaCy с уведомлением
         spacy_info = check_spacy_model_availability()
-        if not spacy_info["model_loadable"]:
-            notification_manager.warning(
-                "SpaCy недоступен",
-                f"Модель {SPACY_MODEL} не найдена",
-                "Используйте: poetry run python scripts/setup_spacy.py",
+
+        # Проверяем установку моделей
+        if not spacy_info["spacy_installed"]:
+            notification_manager.error(
+                "SpaCy не установлен",
+                "Установите SpaCy для работы с текстом",
+                "Используйте: pip install spacy",
             )
         else:
-            notification_manager.success(
-                "SpaCy готов", "Языковая модель загружена успешно"
-            )
+            # Проверяем наличие хотя бы одной модели
+            if not (spacy_info["ru_model_loadable"] or spacy_info["en_model_loadable"]):
+                notification_manager.warning(
+                    "SpaCy модели не найдены",
+                    "Ни одна языковая модель не установлена",
+                    "Используйте: poetry run python scripts/setup_spacy.py",
+                )
+            else:
+                # Информируем о доступных моделях
+                models_status = []
+                if spacy_info["ru_model_loadable"]:
+                    models_status.append("русская")
+                if spacy_info["en_model_loadable"]:
+                    models_status.append("английская")
+
+                notification_manager.success(
+                    "SpaCy готов", f"Загружены модели: {', '.join(models_status)}"
+                )
 
         # Проверяем доступность PyQt6
         try:
@@ -340,17 +357,35 @@ def stats(documents: Optional[str], model: str):
 @click.option("--file", "-f", required=True, help="Путь к файлу для суммаризации")
 @click.option("--model", "-m", default="doc2vec_model", help="Имя Doc2Vec модели")
 @click.option("--sentences", "-s", default=5, help="Количество предложений в выжимке")
+@click.option(
+    "--min-length", "-l", default=15, help="Минимальная длина предложения в символах"
+)
+@click.option(
+    "--min-words", "-w", default=5, help="Минимальное количество слов в предложении"
+)
+@click.option(
+    "--no-filter", is_flag=True, help="Отключить фильтрацию коротких предложений"
+)
 @click.option("--output", "-o", help="Файл для сохранения выжимки")
 def summarize_file(
-    file: str, model: str, sentences: int, output: Optional[str]
+    file: str,
+    model: str,
+    sentences: int,
+    min_length: int,
+    min_words: int,
+    no_filter: bool,
+    output: Optional[str],
 ) -> None:
     """
-    Создать выжимку из файла
+    Создать выжимку из файла с фильтрацией коротких предложений
 
     Args:
         file: Путь к файлу для суммаризации
         model: Имя Doc2Vec модели для улучшенной суммаризации
         sentences: Количество предложений в выжимке
+        min_length: Минимальная длина предложения в символах
+        min_words: Минимальное количество слов в предложении
+        no_filter: Отключить фильтрацию коротких предложений
         output: Путь для сохранения выжимки (опционально)
     """
     file_path = Path(file)
@@ -369,6 +404,16 @@ def summarize_file(
         click.echo("✅ Используется продвинутая суммаризация с Doc2Vec")
         summarizer = TextSummarizer(loaded_model)
 
+    # Настройка параметров фильтрации
+    if not no_filter:
+        summarizer.min_summary_sentence_length = min_length
+        summarizer.min_words_in_sentence = min_words
+        click.echo(f"📏 Фильтрация: минимум {min_length} символов и {min_words} слов")
+    else:
+        summarizer.min_summary_sentence_length = 1
+        summarizer.min_words_in_sentence = 1
+        click.echo("📋 Фильтрация коротких предложений отключена")
+
     logger.info(f"Создание выжимки файла: {file_path}")
 
     # Создание выжимки
@@ -377,7 +422,10 @@ def summarize_file(
 
         if not summary:
             click.echo(
-                "❌ Не удалось создать выжимку. Проверьте файл и попробуйте снова"
+                "❌ Не удалось создать выжимку. Возможные причины:\n"
+                "   - Все предложения слишком короткие\n"
+                "   - Файл не содержит текста\n"
+                "   Попробуйте --no-filter или уменьшите --min-length"
             )
             return
 
@@ -404,17 +452,31 @@ def summarize_file(
                 click.echo(
                     f"  📑 Исходных предложений: {stats['original_sentences_count']}"
                 )
+
+                if "valid_original_sentences_count" in stats and not no_filter:
+                    filtered = (
+                        stats["original_sentences_count"]
+                        - stats["valid_original_sentences_count"]
+                    )
+                    click.echo(f"  🔽 Отфильтровано коротких: {filtered}")
+                    click.echo(
+                        f"  ✅ Валидных предложений: {stats['valid_original_sentences_count']}"
+                    )
+
                 click.echo(
                     f"  📄 Предложений в выжимке: {stats['summary_sentences_count']}"
                 )
-                click.echo(
-                    f"  📉 Коэффициент сжатия предложений: {stats['compression_ratio']:.1%}"
-                )
+                click.echo(f"  📉 Коэффициент сжатия: {stats['compression_ratio']:.1%}")
                 click.echo(f"  🔤 Исходных символов: {stats['original_chars_count']:,}")
                 click.echo(f"  ✂️ Символов в выжимке: {stats['summary_chars_count']:,}")
                 click.echo(
                     f"  📊 Сокращение текста: {stats['chars_compression_ratio']:.1%}"
                 )
+
+                if "avg_sentence_length" in stats:
+                    click.echo(
+                        f"  📏 Средняя длина предложения: {stats['avg_sentence_length']:.1f} слов"
+                    )
 
         except Exception as e:
             logger.error(f"Ошибка при расчете статистики: {e}")
@@ -425,9 +487,11 @@ def summarize_file(
             try:
                 with open(output_path, "w", encoding="utf-8") as f:
                     f.write(f"Выжимка файла: {file_path.name}\n")
-                    f.write(
-                        f"Создано: {click.get_current_context().meta.get('timestamp', 'неизвестно')}\n"
-                    )
+                    f.write(f"Создано: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    if not no_filter:
+                        f.write(
+                            f"Фильтрация: мин. {min_length} символов, {min_words} слов\n"
+                        )
                     f.write("=" * 60 + "\n\n")
 
                     for i, sentence in enumerate(summary, 1):
@@ -441,11 +505,20 @@ def summarize_file(
                         f.write(
                             f"Исходных предложений: {stats['original_sentences_count']}\n"
                         )
+
+                        if "valid_original_sentences_count" in stats and not no_filter:
+                            f.write(
+                                f"Валидных предложений: {stats['valid_original_sentences_count']}\n"
+                            )
+                            f.write(
+                                f"Отфильтровано: {stats['original_sentences_count'] - stats['valid_original_sentences_count']}\n"
+                            )
+
                         f.write(
                             f"Предложений в выжимке: {stats['summary_sentences_count']}\n"
                         )
                         f.write(
-                            f"Коэффициент сжатия предложений: {stats['compression_ratio']:.1%}\n"
+                            f"Коэффициент сжатия: {stats['compression_ratio']:.1%}\n"
                         )
                         f.write(
                             f"Исходных символов: {stats['original_chars_count']:,}\n"
@@ -596,6 +669,15 @@ def summarize_text(
     default=3,
     help="Количество предложений в выжимке каждого файла",
 )
+@click.option(
+    "--min-length", "-l", default=15, help="Минимальная длина предложения в символах"
+)
+@click.option(
+    "--min-words", "-w", default=5, help="Минимальное количество слов в предложении"
+)
+@click.option(
+    "--no-filter", is_flag=True, help="Отключить фильтрацию коротких предложений"
+)
 @click.option("--output-dir", "-o", help="Папка для сохранения выжимок")
 @click.option(
     "--extensions", default="pdf,docx,doc", help="Расширения файлов (через запятую)"
@@ -609,20 +691,26 @@ def summarize_batch(
     documents: str,
     model: str,
     sentences: int,
+    min_length: int,
+    min_words: int,
+    no_filter: bool,
     output_dir: Optional[str],
     extensions: str,
     max_files: int,
 ) -> None:
     """
-    Создать выжимки для всех документов в папке
+    Создать выжимки для всех документов в папке с фильтрацией
 
     Args:
         documents: Путь к папке с документами
         model: Имя Doc2Vec модели
         sentences: Количество предложений в каждой выжимке
+        min_length: Минимальная длина предложения
+        min_words: Минимальное количество слов
+        no_filter: Отключить фильтрацию
         output_dir: Папка для сохранения выжимок
-        extensions: Обрабатываемые расширения файлов (через запятую)
-        max_files: Максимальное количество файлов (0 = без ограничений)
+        extensions: Обрабатываемые расширения файлов
+        max_files: Максимальное количество файлов
     """
     documents_path = Path(documents)
     if not documents_path.exists():
@@ -639,6 +727,16 @@ def summarize_batch(
     else:
         click.echo("✅ Используется продвинутая суммаризация с Doc2Vec")
         summarizer = TextSummarizer(loaded_model)
+
+    # Настройка фильтрации
+    if not no_filter:
+        summarizer.min_summary_sentence_length = min_length
+        summarizer.min_words_in_sentence = min_words
+        click.echo(f"📏 Фильтрация: минимум {min_length} символов и {min_words} слов")
+    else:
+        summarizer.min_summary_sentence_length = 1
+        summarizer.min_words_in_sentence = 1
+        click.echo("📋 Фильтрация отключена")
 
     # Подготовка расширений
     allowed_extensions = {f".{ext.strip().lower()}" for ext in extensions.split(",")}
@@ -671,6 +769,7 @@ def summarize_batch(
 
     successful = 0
     failed = 0
+    filtered_out = 0
 
     # Обработка файлов
     for i, file_path in enumerate(all_files, 1):
@@ -683,8 +782,10 @@ def summarize_batch(
             )
 
             if not summary:
-                click.echo(f"   ⚠️ Не удалось создать выжимку для {file_path.name}")
-                failed += 1
+                click.echo(
+                    "   ⚠️ Не удалось создать выжимку (возможно, все предложения слишком короткие)"
+                )
+                filtered_out += 1
                 continue
 
             # Краткий вывод в консоль
@@ -707,6 +808,10 @@ def summarize_batch(
                         f.write(f"Выжимка файла: {file_path.name}\n")
                         f.write(f"Исходный путь: {file_path}\n")
                         f.write(f"Количество предложений: {len(summary)}\n")
+                        if not no_filter:
+                            f.write(
+                                f"Фильтрация: мин. {min_length} символов, {min_words} слов\n"
+                            )
                         f.write("=" * 60 + "\n\n")
 
                         for j, sentence in enumerate(summary, 1):
@@ -729,12 +834,18 @@ def summarize_batch(
     click.echo("\n📊 Итоговая статистика пакетной суммаризации:")
     click.echo("=" * 50)
     click.echo(f"  ✅ Успешно обработано: {successful}")
+    click.echo(f"  ⚠️ Отфильтровано (короткие предложения): {filtered_out}")
     click.echo(f"  ❌ Ошибок: {failed}")
     click.echo(f"  📁 Всего файлов: {len(all_files)}")
     click.echo(f"  📈 Процент успеха: {(successful / len(all_files) * 100):.1f}%")
 
     if output_dir and successful > 0:
         click.echo(f"  💾 Выжимки сохранены в: {output_path}")
+
+    if filtered_out > 0 and not no_filter:
+        click.echo(
+            "\n💡 Совет: Используйте --no-filter или уменьшите --min-length для обработки файлов с короткими предложениями"
+        )
 
 
 @cli.command()

@@ -1,0 +1,21 @@
+{
+  "training_time_formatted": "972.3с (16.2м)",
+  "training_date": "2025-06-22 14:55:45",
+  "corpus_size": 109,
+  "documents_base_path": "C:\\Users\\evgen\\Evgeny\\Dev_projects\\Dev_Python\\diplom\\СТАТЬИ по ГЛОКАЛИЗАЦИИ",
+  "vector_size": 200,
+  "epochs": 15,
+  "window": 10,
+  "min_count": 5,
+  "dm": 1,
+  "negative": 5,
+  "preset_used": "fast",
+  "language_distribution": {
+    "russian": 32,
+    "english": 61,
+    "mixed": 15,
+    "total": 109
+  },
+  "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "win32"
+}

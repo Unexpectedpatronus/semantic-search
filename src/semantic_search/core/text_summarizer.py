@@ -32,10 +32,54 @@ class TextSummarizer:
         self.config = SUMMARIZATION_CONFIG
         self.chunk_size = TEXT_PROCESSING_CONFIG.get("chunk_size", 500_000)
 
+        # Минимальная длина предложения для включения в выжимку
+        self.min_summary_sentence_length = self.config.get("min_sentence_length", 15)
+        # Минимальное количество слов в предложении
+        self.min_words_in_sentence = self.config.get("min_words_in_sentence", 5)
+
     def set_model(self, model: Doc2Vec):
         """Установка модели Doc2Vec"""
         self.model = model
         logger.info("Модель для суммаризации установлена")
+
+    def _filter_sentence(self, sentence: str) -> bool:
+        """
+        Проверка, подходит ли предложение для включения в выжимку
+
+        Args:
+            sentence: Предложение для проверки
+
+        Returns:
+            True если предложение подходит, False если нужно отфильтровать
+        """
+        # Убираем лишние пробелы
+        cleaned_sentence = sentence.strip()
+
+        # Проверка минимальной длины в символах
+        if len(cleaned_sentence) < self.min_summary_sentence_length:
+            return False
+
+        # Проверка минимального количества слов
+        words = cleaned_sentence.split()
+        if len(words) < self.min_words_in_sentence:
+            return False
+
+        # Проверка на наличие хотя бы одного значимого слова (не только предлоги/союзы)
+        meaningful_words = [w for w in words if len(w) > 3]
+        if len(meaningful_words) < 2:
+            return False
+
+        # Проверка на слишком много цифр (возможно, это таблица или список)
+        digit_ratio = sum(c.isdigit() for c in cleaned_sentence) / len(cleaned_sentence)
+        if digit_ratio > 0.5:
+            return False
+
+        # Проверка на повторяющиеся символы (например, "............")
+        for char in cleaned_sentence:
+            if cleaned_sentence.count(char * 5) > 0:  # 5 одинаковых символов подряд
+                return False
+
+        return True
 
     def _sentence_to_vector(self, sentence_tokens: List[str]) -> Optional[np.ndarray]:
         """
@@ -63,6 +107,7 @@ class TextSummarizer:
     ) -> List[Tuple[str, float]]:
         """
         Вычисление оценок важности предложений методом TextRank
+        с учетом фильтрации коротких предложений
 
         Args:
             sentences: Список предложений
@@ -70,19 +115,41 @@ class TextSummarizer:
         Returns:
             Список кортежей (предложение, оценка)
         """
+        # Фильтруем предложения перед оценкой
+        filtered_sentences = []
+        sentence_indices = []
+
+        for i, sentence in enumerate(sentences):
+            if self._filter_sentence(sentence):
+                filtered_sentences.append(sentence)
+                sentence_indices.append(i)
+
+        if not filtered_sentences:
+            logger.warning("Все предложения отфильтрованы как слишком короткие")
+            # Возвращаем самые длинные предложения если все отфильтрованы
+            sorted_by_length = sorted(
+                enumerate(sentences), key=lambda x: len(x[1]), reverse=True
+            )
+            return [(sent, 1.0) for _, sent in sorted_by_length[:5]]
+
         if not SKLEARN_AVAILABLE or self.model is None:
-            # Fallback: простая оценка по длине предложения
+            # Fallback: оценка по длине и позиции
             scored_sentences = []
-            for sent in sentences:
-                score = len(sent.split())  # Простая оценка по количеству слов
-                scored_sentences.append((sent, float(score)))
+            for i, sent in enumerate(filtered_sentences):
+                # Учитываем длину и позицию (начало текста важнее)
+                position_score = 1.0 - (sentence_indices[i] / len(sentences))
+                length_score = min(
+                    len(sent.split()) / 20, 1.0
+                )  # Нормализуем по 20 словам
+                score = position_score * 0.3 + length_score * 0.7
+                scored_sentences.append((sent, score))
             return scored_sentences
 
-        # Получаем векторы для всех предложений
+        # Получаем векторы для отфильтрованных предложений
         sentence_vectors = []
         valid_sentences = []
 
-        for sentence in sentences:
+        for sentence in filtered_sentences:
             tokens = self.text_processor.preprocess_text(sentence)
             if tokens:  # Проверяем, что есть значимые токены
                 vector = self._sentence_to_vector(tokens)
@@ -164,7 +231,7 @@ class TextSummarizer:
         Args:
             text: Исходный текст
             sentences_count: Количество предложений в выжимке
-            min_sentence_length: Минимальная длина предложения
+            min_sentence_length: Минимальная длина предложения (переопределяет настройки)
 
         Returns:
             Список предложений выжимки
@@ -174,7 +241,11 @@ class TextSummarizer:
             return []
 
         sentences_count = sentences_count or self.config["default_sentences_count"]
-        min_sentence_length = min_sentence_length or self.config["min_sentence_length"]
+
+        # Временно переопределяем минимальную длину если указана
+        if min_sentence_length is not None:
+            original_min_length = self.min_summary_sentence_length
+            self.min_summary_sentence_length = min_sentence_length
 
         logger.info(
             f"Начинаем суммаризацию текста длиной {len(text)} символов (цель: {sentences_count} предложений)"
@@ -185,19 +256,42 @@ class TextSummarizer:
             logger.warning(
                 f"Текст очень длинный ({len(text)} символов), используем упрощенный метод"
             )
-            return self._summarize_long_text(text, sentences_count, min_sentence_length)
+            result = self._summarize_long_text(
+                text, sentences_count, self.min_summary_sentence_length
+            )
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
+            return result
 
         sentences = self.text_processor.split_into_sentences(text)
 
         if not sentences:
             logger.warning("Не удалось разбить текст на предложения")
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
             return []
 
-        if len(sentences) <= sentences_count:
-            logger.info("Количество предложений меньше или равно требуемому")
-            return sentences
+        # Фильтруем слишком короткие предложения перед проверкой
+        valid_sentences = [s for s in sentences if self._filter_sentence(s)]
 
-        # Вычисляем оценки важности предложений
+        if len(valid_sentences) <= sentences_count:
+            logger.info(
+                f"Количество подходящих предложений ({len(valid_sentences)}) меньше или равно требуемому"
+            )
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
+            return valid_sentences
+
+        # Вычисляем оценки важности предложений (уже отфильтрованных)
         scored_sentences = self._calculate_sentence_scores(sentences)
 
         # Сортируем по оценке (убывание)
@@ -207,16 +301,23 @@ class TextSummarizer:
         top_sentences = scored_sentences[:sentences_count]
 
         # Восстанавливаем исходный порядок предложений
-        original_sentences = sentences
         summary_sentences = []
 
-        for original_sent in original_sentences:
-            for summary_sent, score in top_sentences:
-                if original_sent == summary_sent:
-                    summary_sentences.append(original_sent)
+        # Создаем множество для быстрого поиска
+        top_sentences_set = {sent for sent, _ in top_sentences}
+
+        for original_sent in sentences:
+            if original_sent in top_sentences_set:
+                summary_sentences.append(original_sent)
+                if len(summary_sentences) >= sentences_count:
                     break
 
         logger.info(f"Создана выжимка из {len(summary_sentences)} предложений")
+
+        # Восстанавливаем оригинальную настройку
+        if min_sentence_length is not None:
+            self.min_summary_sentence_length = original_min_length
+
         return summary_sentences
 
     def _summarize_long_text(
@@ -248,6 +349,14 @@ class TextSummarizer:
             if not chunk_sentences:
                 continue
 
+            # Фильтруем короткие предложения
+            valid_chunk_sentences = [
+                s for s in chunk_sentences if self._filter_sentence(s)
+            ]
+
+            if not valid_chunk_sentences:
+                continue
+
             # Для каждого чанка выбираем пропорциональное количество предложений
             chunk_sentence_count = max(1, sentences_count // len(chunks))
             if i == 0:  # Первый чанк может содержать больше важной информации
@@ -256,19 +365,25 @@ class TextSummarizer:
             # Простая эвристика: берем первые и последние предложения + самые длинные
             important_sentences = []
 
-            # Первое предложение чанка
-            if chunk_sentences:
-                important_sentences.append(chunk_sentences[0])
+            # Первое предложение чанка (если оно достаточно длинное)
+            if valid_chunk_sentences:
+                important_sentences.append(valid_chunk_sentences[0])
 
             # Последнее предложение чанка
-            if len(chunk_sentences) > 1:
-                important_sentences.append(chunk_sentences[-1])
+            if len(valid_chunk_sentences) > 1:
+                important_sentences.append(valid_chunk_sentences[-1])
 
-            # Самые длинные предложения (обычно более информативные)
-            if len(chunk_sentences) > 2:
-                sorted_by_length = sorted(chunk_sentences[1:-1], key=len, reverse=True)
+            # Самые информативные предложения (длинные, но не слишком)
+            if len(valid_chunk_sentences) > 2:
+                # Сортируем по "информативности" - не слишком короткие и не слишком длинные
+                middle_sentences = valid_chunk_sentences[1:-1]
+                sorted_by_info = sorted(
+                    middle_sentences,
+                    key=lambda s: min(len(s.split()), 50),  # Оптимальная длина ~50 слов
+                    reverse=True,
+                )
                 remaining_count = chunk_sentence_count - len(important_sentences)
-                important_sentences.extend(sorted_by_length[:remaining_count])
+                important_sentences.extend(sorted_by_info[:remaining_count])
 
             all_important_sentences.extend(important_sentences[:chunk_sentence_count])
 
@@ -276,7 +391,7 @@ class TextSummarizer:
         seen = set()
         unique_sentences = []
         for sent in all_important_sentences:
-            if sent not in seen:
+            if sent not in seen and self._filter_sentence(sent):
                 seen.add(sent)
                 unique_sentences.append(sent)
 
@@ -323,17 +438,30 @@ class TextSummarizer:
         """
         original_sentences = self.text_processor.split_into_sentences(original_text)
 
+        # Считаем только валидные предложения в оригинале
+        valid_original_sentences = [
+            s for s in original_sentences if self._filter_sentence(s)
+        ]
+
         stats = {
             "original_sentences_count": len(original_sentences),
+            "valid_original_sentences_count": len(valid_original_sentences),
             "summary_sentences_count": len(summary),
             "compression_ratio": len(summary) / len(original_sentences)
             if original_sentences
+            else 0,
+            "valid_compression_ratio": len(summary) / len(valid_original_sentences)
+            if valid_original_sentences
             else 0,
             "original_chars_count": len(original_text),
             "summary_chars_count": sum(len(sent) for sent in summary),
             "chars_compression_ratio": sum(len(sent) for sent in summary)
             / len(original_text)
             if original_text
+            else 0,
+            "avg_sentence_length": sum(len(sent.split()) for sent in summary)
+            / len(summary)
+            if summary
             else 0,
         }
 
