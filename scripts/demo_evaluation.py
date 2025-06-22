@@ -14,46 +14,46 @@ from semantic_search.evaluation.comparison import QueryTestCase, SearchCompariso
 
 def create_demo_test_cases():
     """Создание демонстрационных тестовых случаев"""
-    # Это примеры - замените на реальные документы из вашего корпуса
+
     test_cases = [
         QueryTestCase(
-            query="транслингвизм и его прикладное значение",
+            query="Понятие глокализации в современной лингвистике",
             relevant_docs={
-                "glocalization_theory.pdf",
-                "content_localization.pdf",
-                "cultural_adaptation.pdf",
+                "Транслигвизм/-1.pdf",
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx",
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf",
             },
             relevance_scores={
-                "glocalization_theory.pdf": 3,
-                "content_localization.pdf": 3,
-                "cultural_adaptation.pdf": 2,
-                "globalization_basics.pdf": 1,
+                "Транслигвизм/-1.pdf": 3,
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx": 3,
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf": 2,
+                "Лингвокреативность/Linguistic_Creativity_Cognitive_And_Communicative_.pdf": 1,
             },
-            description="Основной запрос по транслингвизму",
+            description="Понятие глокализации в современной лингвистике",
         ),
         QueryTestCase(
-            query="адаптация продуктов для локальных рынков",
+            query="Транслингвизм и транслингвальная литература",
             relevant_docs={
-                "product_adaptation.pdf",
-                "local_markets.pdf",
+                "Транслигвизм/-1.pdf",
+                "SALMAN RUSHDIE/rushdie-1997-notes-on-writing-and-the-nation.pdf",
                 "glocal_strategy.pdf",
             },
             relevance_scores={
-                "product_adaptation.pdf": 3,
-                "local_markets.pdf": 3,
-                "glocal_strategy.pdf": 2,
+                "Транслигвизм/-1.pdf": 3,
+                "SALMAN RUSHDIE/rushdie-1997-notes-on-writing-and-the-nation.pdf": 3,
+                "SALMAN RUSHDIE/Hybridization_Heteroglossia_and_the_engl.doc": 2,
             },
-            description="Практические аспекты глокализации",
+            description="Транслингвизм и транслингвальная литература",
         ),
         QueryTestCase(
-            query="культурные особенности в маркетинге",
+            query="Гетерология и диалогизм",
             relevant_docs={"cultural_marketing.pdf", "cross_cultural_comm.pdf"},
             relevance_scores={
-                "cultural_marketing.pdf": 3,
-                "cross_cultural_comm.pdf": 3,
-                "marketing_basics.pdf": 1,
+                "Транслигвизм/-1.pdf": 3,
+                "SALMAN RUSHDIE/12.docx": 3,
+                " Бахтин/Zebroski-MikhailBakhtinQuestion-1992.pdf": 1,
             },
-            description="Культурный аспект",
+            description="Гетерология и диалогизм",
         ),
     ]
 

@@ -1019,7 +1019,7 @@ class MainWindow(QMainWindow):
             self.summary_file_edit.setText(file_path)
 
     def start_training(self):
-        """Начало обучения модели"""
+        """Начало обучения модели с сохранением конфигурации"""
         documents_path = self.docs_path_edit.text()
         if not documents_path:
             QMessageBox.warning(self, "Ошибка", "Выберите папку с документами")
@@ -1054,6 +1054,35 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.No:
                 return
 
+        # Собираем текущие параметры из GUI
+        current_params = {
+            "vector_size": self.vector_size_spin.value(),
+            "window": self.window_spin.value(),
+            "min_count": self.min_count_spin.value(),
+            "epochs": self.epochs_spin.value(),
+            "dm": 1 if self.dm_combo.currentIndex() == 0 else 0,
+            "negative": self.negative_spin.value(),
+        }
+
+        # Обновляем конфигурацию если параметры изменились
+        from semantic_search.config import config_manager
+
+        config_changed = False
+        current_config = config_manager.config.doc2vec
+
+        for param, value in current_params.items():
+            if current_config.get(param) != value:
+                config_changed = True
+                break
+
+        if config_changed:
+            # Обновляем конфигурацию
+            config_manager.update_config(doc2vec=current_params)
+            logger.info("Конфигурация обновлена с новыми параметрами обучения")
+
+            # Информируем пользователя
+            self.status_bar.showMessage("Параметры обучения сохранены в конфигурацию")
+
         # Отключаем кнопку
         self.train_button.setEnabled(False)
         self.training_progress.setVisible(True)
@@ -1063,23 +1092,38 @@ class MainWindow(QMainWindow):
         self.training_log.clear()
         self.training_log.append("Начинаем обучение модели...\n")
 
+        # Показываем используемые параметры
+        self.training_log.append("📋 Параметры обучения:")
+        self.training_log.append(
+            f"   Размерность векторов: {current_params['vector_size']}"
+        )
+        self.training_log.append(f"   Размер окна: {current_params['window']}")
+        self.training_log.append(
+            f"   Минимальная частота: {current_params['min_count']}"
+        )
+        self.training_log.append(f"   Количество эпох: {current_params['epochs']}")
+        self.training_log.append(
+            f"   Режим: {'DM' if current_params['dm'] == 1 else 'DBOW'}"
+        )
+        self.training_log.append(
+            f"   Negative sampling: {current_params['negative']}\n"
+        )
+
         # Определяем пресет
         preset_index = self.preset_combo.currentIndex()
         preset_map = {0: "balanced", 1: "fast", 2: "quality", 3: None}
         preset = preset_map.get(preset_index)
 
-        # Создаем и запускаем поток с новыми параметрами
-        dm_value = 1 if self.dm_combo.currentIndex() == 0 else 0
-
+        # Создаем и запускаем поток
         self.training_thread = TrainingThread(
             documents_path,
             model_name,
-            self.vector_size_spin.value(),
-            self.epochs_spin.value(),
-            window=self.window_spin.value(),
-            min_count=self.min_count_spin.value(),
-            dm=dm_value,
-            negative=self.negative_spin.value(),
+            current_params["vector_size"],
+            current_params["epochs"],
+            window=current_params["window"],
+            min_count=current_params["min_count"],
+            dm=current_params["dm"],
+            negative=current_params["negative"],
             preset=preset,
         )
 
