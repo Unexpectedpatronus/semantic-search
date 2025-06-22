@@ -64,9 +64,13 @@ class Doc2VecTrainer:
         negative: Optional[int],
         hs: Optional[int],
         sample: Optional[float],
+        dm_concat: Optional[int] = None,
+        dm_mean: Optional[int] = None,
+        alpha: Optional[float] = None,
+        min_alpha: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Получить параметры для обучения"""
-        return {
+        """Получить параметры для обучения с поддержкой новых параметров"""
+        params = {
             "vector_size": vector_size or self.config["vector_size"],
             "window": window or self.config["window"],
             "min_count": min_count or self.config["min_count"],
@@ -76,10 +80,33 @@ class Doc2VecTrainer:
             "dm": dm if dm is not None else self.config.get("dm", 1),
             "negative": negative
             if negative is not None
-            else self.config.get("negative", 5),
+            else self.config.get("negative", 10),
             "hs": hs if hs is not None else self.config.get("hs", 0),
-            "sample": sample if sample is not None else self.config.get("sample", 1e-4),
+            "sample": sample if sample is not None else self.config.get("sample", 1e-5),
         }
+
+        # Новые параметры
+        if dm_concat is not None:
+            params["dm_concat"] = dm_concat
+        elif "dm_concat" in self.config:
+            params["dm_concat"] = self.config["dm_concat"]
+
+        if dm_mean is not None:
+            params["dm_mean"] = dm_mean
+        elif "dm_mean" in self.config:
+            params["dm_mean"] = self.config["dm_mean"]
+
+        if alpha is not None:
+            params["alpha"] = alpha
+        elif "alpha" in self.config:
+            params["alpha"] = self.config["alpha"]
+
+        if min_alpha is not None:
+            params["min_alpha"] = min_alpha
+        elif "min_alpha" in self.config:
+            params["min_alpha"] = self.config["min_alpha"]
+
+        return params
 
     def _train_standard(
         self,
@@ -160,6 +187,11 @@ class Doc2VecTrainer:
         negative: Optional[int] = None,
         hs: Optional[int] = None,
         sample: Optional[float] = None,
+        dm_concat: Optional[int] = None,
+        dm_mean: Optional[int] = None,
+        alpha: Optional[float] = None,
+        min_alpha: Optional[float] = None,
+        preset: Optional[str] = None,
     ) -> Optional[Doc2Vec]:
         """
         Обучение модели Doc2Vec с оптимизацией под объём корпуса.
@@ -178,6 +210,7 @@ class Doc2VecTrainer:
             negative: Размер negative sampling
             hs: Использовать Hierarchical Softmax
             sample: Порог для downsampling
+            preset: Использовать пресет настроек ('fast', 'balanced', 'quality')
 
         Returns:
             Обученная модель Doc2Vec или None при ошибке
@@ -188,6 +221,18 @@ class Doc2VecTrainer:
         if not corpus:
             logger.error("Корпус пуст, обучение невозможно")
             return None
+
+        if preset and preset in self.config.get("doc2vec_presets", {}):
+            preset_config: Dict = self.config["doc2vec_presets"][preset]
+            logger.info(f"Используется пресет '{preset}'")
+
+            # Применяем настройки пресета (если параметр не указан явно)
+            vector_size = vector_size or preset_config.get("vector_size")
+            window = window or preset_config.get("window")
+            min_count = min_count or preset_config.get("min_count")
+            epochs = epochs or preset_config.get("epochs")
+            negative = negative or preset_config.get("negative")
+            sample = sample or preset_config.get("sample")
 
         if len(corpus) > 10000:
             # Для больших корпусов - поэпоховое обучение

@@ -58,29 +58,61 @@ class AppConfig:
         if not self.text_processing:
             self.text_processing = {
                 "min_text_length": 100,
-                "max_text_length": 5_000_000,  # Увеличено до 5MB
+                "max_text_length": 5_000_000,
                 "min_tokens_count": 10,
                 "min_token_length": 2,
                 "min_sentence_length": 10,
                 "remove_stop_words": True,
                 "lemmatize": True,
-                "max_file_size_mb": 100,  # Увеличено до 100MB
-                "chunk_size": 800_000,  # Для больших файлов
-                "spacy_max_length": 3_000_000,  # Лимит SpaCy
+                "max_file_size_mb": 100,
+                "chunk_size": 800_000,
+                "spacy_max_length": 3_000_000,
             }
 
         if not self.doc2vec:
+            # ОБНОВЛЕННЫЕ ПАРАМЕТРЫ для многоязычных документов
             self.doc2vec = {
-                "vector_size": 150,
-                "window": 10,
-                "min_count": 2,
-                "epochs": 40,
+                "vector_size": 300,  # Увеличено для многоязычности
+                "window": 15,  # Увеличено для длинных документов
+                "min_count": 3,  # Увеличено для фильтрации шума
+                "epochs": 30,  # Оптимизировано для баланса скорость/качество
                 "workers": max(1, multiprocessing.cpu_count() - 1),
                 "seed": 42,
                 "dm": 1,  # Distributed Memory
-                "negative": 5,
-                "hs": 0,  # Hierarchical Softmax
-                "sample": 1e-4,
+                "dm_concat": 0,  # Усреднение (экономия памяти)
+                "dm_mean": 1,  # Усреднение векторов слов
+                "negative": 10,  # Увеличено для лучшего качества
+                "hs": 0,  # Hierarchical Softmax отключен
+                "sample": 1e-5,  # Уменьшено для сохранения терминов
+                "alpha": 0.025,  # Начальная скорость обучения
+                "min_alpha": 0.0001,  # Конечная скорость обучения
+            }
+            # Альтернативные конфигурации
+            self.doc2vec_presets = {
+                "fast": {
+                    "vector_size": 200,
+                    "window": 10,
+                    "min_count": 5,
+                    "epochs": 15,
+                    "negative": 5,
+                    "sample": 1e-4,
+                },
+                "balanced": {
+                    "vector_size": 300,
+                    "window": 15,
+                    "min_count": 3,
+                    "epochs": 30,
+                    "negative": 10,
+                    "sample": 1e-5,
+                },
+                "quality": {
+                    "vector_size": 400,
+                    "window": 20,
+                    "min_count": 2,
+                    "epochs": 50,
+                    "negative": 15,
+                    "sample": 1e-5,
+                },
             }
 
         if not self.search:

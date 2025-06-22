@@ -3,9 +3,6 @@
 import sys
 from pathlib import Path
 
-# Добавляем путь к src
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
 from loguru import logger
 
 from semantic_search.core.doc2vec_trainer import Doc2VecTrainer

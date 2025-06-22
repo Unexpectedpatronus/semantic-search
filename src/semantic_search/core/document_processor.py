@@ -106,13 +106,7 @@ class DocumentProcessor:
                     "extension": file_path.suffix,
                     "tokens_count": len(tokens),
                     "text_length": len(raw_text),
-                    "full_path": str(file_path.absolute()),
-                    "root_path": str(root_path.absolute()),
                 }
-                # print(f"file_path:   {str(file_path)}")
-                # print(f"relative_path:  {str(relative_path)}")
-                # print(f"metadata[full_path]:  {metadata['full_path']}")
-                # print(f"metadata[root_path]:   {metadata['root_path']}")
 
                 processed_count += 1
                 yield ProcessedDocument(

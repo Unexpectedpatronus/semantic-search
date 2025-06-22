@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from loguru import logger
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -62,16 +62,22 @@ class TrainingThread(QThread):
         model_name: str,
         vector_size: int,
         epochs: int,
+        window: int = 15,
+        min_count: int = 3,
         dm: int = 1,
-        negative: int = 5,
+        negative: int = 10,
+        preset: Optional[str] = None,
     ):
         super().__init__()
         self.documents_path = documents_path
         self.model_name = model_name
         self.vector_size = vector_size
         self.epochs = epochs
+        self.window = window
+        self.min_count = min_count
         self.dm = dm
         self.negative = negative
+        self.preset = preset
         self.is_cancelled = False
 
     def run(self):
@@ -94,7 +100,7 @@ class TrainingThread(QThread):
                 return
 
             # Обработка каждого документа
-            step_size = 70 / len(file_paths)
+            step_size = 40 / len(file_paths)
             current_progress = 10
 
             for i, doc in enumerate(processor.process_documents(self.documents_path)):
@@ -122,16 +128,30 @@ class TrainingThread(QThread):
             stats = calculate_statistics_from_processed_docs(processed_docs)
             self.statistics.emit(stats)
 
+            # Анализ языкового состава (новое)
+            self.progress.emit(45, "Анализ языкового состава документов...")
+            language_info = self._analyze_language_distribution(corpus)
+
+            logger.info(f"Языковой состав: {language_info}")
+
             trainer = Doc2VecTrainer()
 
-            # Обучение модели
-            self.progress.emit(80, "Обучение модели...")
+            # Обучение модели с новыми параметрами
+            self.progress.emit(
+                50,
+                f"Обучение модели (векторы: {self.vector_size}, эпохи: {self.epochs})...",
+            )
+
             model = trainer.train_model(
                 corpus,
                 vector_size=self.vector_size,
                 epochs=self.epochs,
+                window=self.window,
+                min_count=self.min_count,
                 dm=self.dm,
                 negative=self.negative,
+                sample=1e-5,  # Оптимизировано для технических терминов
+                preset=self.preset,
             )
 
             if model:
@@ -148,8 +168,12 @@ class TrainingThread(QThread):
                     "documents_base_path": str(self.documents_path.absolute()),
                     "vector_size": self.vector_size,
                     "epochs": self.epochs,
+                    "window": self.window,
+                    "min_count": self.min_count,
                     "dm": self.dm,
                     "negative": self.negative,
+                    "preset_used": self.preset,
+                    "language_distribution": language_info,
                     "python_version": sys.version,
                     "platform": sys.platform,
                 }
@@ -171,6 +195,41 @@ class TrainingThread(QThread):
         except Exception as e:
             logger.error(f"Ошибка в потоке обучения: {e}", exc_info=True)
             self.finished.emit(False, f"Ошибка: {str(e)}")
+
+    def _analyze_language_distribution(self, corpus):
+        """Анализ языкового состава корпуса"""
+        language_stats = {"russian": 0, "english": 0, "mixed": 0}
+
+        for tokens, doc_id, metadata in corpus[
+            :100
+        ]:  # Анализируем первые 100 документов
+            # Подсчет кириллических и латинских токенов
+            cyrillic_tokens = sum(
+                1 for t in tokens[:200] if any("\u0400" <= c <= "\u04ff" for c in t)
+            )
+            latin_tokens = sum(1 for t in tokens[:200] if t.isalpha() and t.isascii())
+
+            total = cyrillic_tokens + latin_tokens
+            if total > 0:
+                cyrillic_ratio = cyrillic_tokens / total
+
+                if cyrillic_ratio > 0.8:
+                    language_stats["russian"] += 1
+                elif cyrillic_ratio < 0.2:
+                    language_stats["english"] += 1
+                else:
+                    language_stats["mixed"] += 1
+
+        # Экстраполируем на весь корпус
+        sample_size = min(100, len(corpus))
+        scale_factor = len(corpus) / sample_size
+
+        return {
+            "russian": int(language_stats["russian"] * scale_factor),
+            "english": int(language_stats["english"] * scale_factor),
+            "mixed": int(language_stats["mixed"] * scale_factor),
+            "total": len(corpus),
+        }
 
     def cancel(self):
         """Отмена обучения"""
@@ -426,13 +485,29 @@ class MainWindow(QMainWindow):
         name_layout.addWidget(self.model_name_edit)
         params_layout.addLayout(name_layout)
 
+        # Выбор пресета
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Пресет настроек:"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(
+            [
+                "Сбалансированный (рекомендуется)",
+                "Быстрый (для тестирования)",
+                "Качественный (медленный)",
+                "Пользовательский",
+            ]
+        )
+        self.preset_combo.currentIndexChanged.connect(self.on_preset_changed)
+        preset_layout.addWidget(self.preset_combo)
+        params_layout.addLayout(preset_layout)
+
         # Размерность векторов
         vector_layout = QHBoxLayout()
         vector_layout.addWidget(QLabel("Размерность векторов:"))
         self.vector_size_spin = QSpinBox()
         self.vector_size_spin.setMinimum(50)
         self.vector_size_spin.setMaximum(500)
-        self.vector_size_spin.setValue(150)
+        self.vector_size_spin.setValue(300)
         vector_layout.addWidget(self.vector_size_spin)
         params_layout.addLayout(vector_layout)
 
@@ -442,13 +517,33 @@ class MainWindow(QMainWindow):
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setMinimum(1)
         self.epochs_spin.setMaximum(100)
-        self.epochs_spin.setValue(40)
+        self.epochs_spin.setValue(30)
         epochs_layout.addWidget(self.epochs_spin)
         params_layout.addLayout(epochs_layout)
 
         # Дополнительные параметры (расширенные)
         advanced_group = QGroupBox("Расширенные параметры (необязательно)")
         advanced_layout = QVBoxLayout()
+
+        # Размер окна
+        window_layout = QHBoxLayout()
+        window_layout.addWidget(QLabel("Размер окна контекста:"))
+        self.window_spin = QSpinBox()
+        self.window_spin.setMinimum(5)
+        self.window_spin.setMaximum(50)
+        self.window_spin.setValue(15)
+        window_layout.addWidget(self.window_spin)
+        advanced_layout.addLayout(window_layout)
+
+        # Минимальная частота
+        min_count_layout = QHBoxLayout()
+        min_count_layout.addWidget(QLabel("Минимальная частота слова:"))
+        self.min_count_spin = QSpinBox()
+        self.min_count_spin.setMinimum(1)
+        self.min_count_spin.setMaximum(10)
+        self.min_count_spin.setValue(3)
+        min_count_layout.addWidget(self.min_count_spin)
+        advanced_layout.addLayout(min_count_layout)
 
         # DM режим
         dm_layout = QHBoxLayout()
@@ -467,7 +562,7 @@ class MainWindow(QMainWindow):
         self.negative_spin = QSpinBox()
         self.negative_spin.setMinimum(0)
         self.negative_spin.setMaximum(20)
-        self.negative_spin.setValue(5)
+        self.negative_spin.setValue(10)
         negative_layout.addWidget(self.negative_spin)
         advanced_layout.addLayout(negative_layout)
 
@@ -493,6 +588,41 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.training_log)
 
         self.tab_widget.addTab(training_widget, "🧠 Обучение")
+
+    def on_preset_changed(self, index):
+        """Обработка изменения пресета настроек"""
+        if index == 0:  # Сбалансированный
+            self.vector_size_spin.setValue(300)
+            self.epochs_spin.setValue(30)
+            self.window_spin.setValue(15)
+            self.min_count_spin.setValue(3)
+            self.negative_spin.setValue(10)
+            self.training_log.append(
+                "📋 Выбран сбалансированный пресет (рекомендуется для большинства случаев)"
+            )
+
+        elif index == 1:  # Быстрый
+            self.vector_size_spin.setValue(200)
+            self.epochs_spin.setValue(15)
+            self.window_spin.setValue(10)
+            self.min_count_spin.setValue(5)
+            self.negative_spin.setValue(5)
+            self.training_log.append("⚡ Выбран быстрый пресет (для тестирования)")
+
+        elif index == 2:  # Качественный
+            self.vector_size_spin.setValue(400)
+            self.epochs_spin.setValue(50)
+            self.window_spin.setValue(20)
+            self.min_count_spin.setValue(2)
+            self.negative_spin.setValue(15)
+            self.training_log.append(
+                "🏆 Выбран качественный пресет (максимальное качество, медленное обучение)"
+            )
+
+        elif index == 3:  # Пользовательский
+            self.training_log.append(
+                "🔧 Пользовательский режим - настройте параметры вручную"
+            )
 
     def create_summarization_tab(self):
         """Создание вкладки суммаризации"""
@@ -737,7 +867,12 @@ class MainWindow(QMainWindow):
         self.training_log.clear()
         self.training_log.append("Начинаем обучение модели...\n")
 
-        # Создаем и запускаем поток
+        # Определяем пресет
+        preset_index = self.preset_combo.currentIndex()
+        preset_map = {0: "balanced", 1: "fast", 2: "quality", 3: None}
+        preset = preset_map.get(preset_index)
+
+        # Создаем и запускаем поток с новыми параметрами
         dm_value = 1 if self.dm_combo.currentIndex() == 0 else 0
 
         self.training_thread = TrainingThread(
@@ -745,8 +880,11 @@ class MainWindow(QMainWindow):
             model_name,
             self.vector_size_spin.value(),
             self.epochs_spin.value(),
+            window=self.window_spin.value(),
+            min_count=self.min_count_spin.value(),
             dm=dm_value,
             negative=self.negative_spin.value(),
+            preset=preset,
         )
 
         self.training_thread.progress.connect(self.on_training_progress)

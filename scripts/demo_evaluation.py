@@ -17,7 +17,7 @@ def create_demo_test_cases():
     # Это примеры - замените на реальные документы из вашего корпуса
     test_cases = [
         QueryTestCase(
-            query="глокализация и локализация контента",
+            query="транслингвизм и его прикладное значение",
             relevant_docs={
                 "glocalization_theory.pdf",
                 "content_localization.pdf",
@@ -29,7 +29,7 @@ def create_demo_test_cases():
                 "cultural_adaptation.pdf": 2,
                 "globalization_basics.pdf": 1,
             },
-            description="Основной запрос по глокализации",
+            description="Основной запрос по транслингвизму",
         ),
         QueryTestCase(
             query="адаптация продуктов для локальных рынков",
