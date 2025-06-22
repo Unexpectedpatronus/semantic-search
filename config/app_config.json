@@ -12,16 +12,42 @@
     "spacy_max_length": 3000000
   },
   "doc2vec": {
-    "vector_size": 150,
-    "window": 10,
-    "min_count": 2,
-    "epochs": 40,
+    "vector_size": 300,
+    "window": 15,
+    "min_count": 3,
+    "epochs": 30,
     "workers": 15,
     "seed": 42,
     "dm": 1,
-    "negative": 5,
+    "negative": 10,
     "hs": 0,
     "sample": 0.0001
+  },
+  "doc2vec_presets": {
+    "fast": {
+      "vector_size": 200,
+      "window": 10,
+      "min_count": 5,
+      "epochs": 15,
+      "negative": 5,
+      "sample": 0.0001
+    },
+    "balanced": {
+      "vector_size": 300,
+      "window": 15,
+      "min_count": 3,
+      "epochs": 30,
+      "negative": 10,
+      "sample": 1e-05
+    },
+    "quality": {
+      "vector_size": 400,
+      "window": 20,
+      "min_count": 2,
+      "epochs": 50,
+      "negative": 15,
+      "sample": 1e-05
+    }
   },
   "search": {
     "default_top_k": 10,

@@ -1,4 +1,4 @@
-"""Базовые классы и альтернативные методы поиска"""
+"""Базовые классы и альтернативные методы поиска (обновленная версия с TF-IDF и BM25)"""
 
 import json
 import os
@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from semantic_search.core.search_engine import SearchResult
 from semantic_search.utils.text_utils import TextProcessor
@@ -70,12 +72,292 @@ class Doc2VecSearchAdapter(BaseSearchMethod):
     def index(self, documents: List[Tuple[str, str, str]]) -> None:
         """Doc2Vec уже проиндексирован при обучении"""
         self.indexed_documents = documents
+        # Для Doc2Vec время индексации = время обучения, которое мы не измеряем здесь
+        self.index_time = 0
 
     def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
         """Использует существующий поисковый движок"""
         return self.search_engine.search(query, top_k=top_k)
 
 
+class TFIDFSearchBaseline(BaseSearchMethod):
+    """
+    Поиск с использованием TF-IDF
+    Классический метод информационного поиска для сравнения
+    """
+
+    def __init__(self):
+        super().__init__("TF-IDF")
+        self.text_processor = TextProcessor()
+        self.vectorizer = TfidfVectorizer(
+            max_features=10000,
+            ngram_range=(1, 2),  # Униграммы и биграммы
+            min_df=2,  # Минимальная частота документа
+            max_df=0.95,  # Максимальная частота документа
+            sublinear_tf=True,  # Логарифмическое масштабирование TF
+            use_idf=True,
+            smooth_idf=True,
+            lowercase=True,
+            tokenizer=self._custom_tokenizer,  # Используем наш токенизатор
+        )
+        self.tfidf_matrix = None
+        self.documents = {}
+        self.doc_ids = []
+
+    def _custom_tokenizer(self, text: str) -> List[str]:
+        """Использование того же токенизатора, что и в Doc2Vec для честного сравнения"""
+        # Используем базовую токенизацию без SpaCy для скорости
+        return self.text_processor.preprocess_basic(text)
+
+    def index(self, documents: List[Tuple[str, str, Any]]) -> None:
+        """
+        Индексация документов с TF-IDF
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        start_time = time.time()
+        logger.info(f"Начинаем индексацию {len(documents)} документов через TF-IDF")
+
+        # Извлекаем тексты и сохраняем метаданные
+        texts = []
+        self.doc_ids = []
+
+        for doc_id, text, metadata in documents:
+            texts.append(text)
+            self.doc_ids.append(doc_id)
+            self.documents[doc_id] = {"text": text, "metadata": metadata}
+
+        # Создаем TF-IDF матрицу
+        logger.info("Построение TF-IDF матрицы...")
+        self.tfidf_matrix = self.vectorizer.fit_transform(texts)
+
+        self.indexed_documents = documents
+        self.index_time = time.time() - start_time
+
+        logger.info(f"Индексация TF-IDF завершена за {self.index_time:.2f} секунд")
+        logger.info(f"Размер словаря: {len(self.vectorizer.vocabulary_)}")
+        logger.info(f"Размер матрицы: {self.tfidf_matrix.shape}")
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов по запросу с TF-IDF
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        if self.tfidf_matrix is None:
+            logger.error("Индекс пуст. Сначала проиндексируйте документы")
+            return []
+
+        try:
+            # Векторизуем запрос
+            query_vector = self.vectorizer.transform([query])
+
+            # Вычисляем косинусное сходство
+            similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
+
+            # Получаем топ-k результатов
+            top_indices = similarities.argsort()[-top_k:][::-1]
+
+            # Создаем результаты
+            results = []
+            for idx in top_indices:
+                if similarities[idx] > 0:  # Фильтруем нулевые схожести
+                    doc_id = self.doc_ids[idx]
+                    metadata = self.documents[doc_id].get("metadata", {})
+                    results.append(
+                        SearchResult(doc_id, float(similarities[idx]), metadata)
+                    )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске TF-IDF: {e}")
+            return []
+
+
+class BM25SearchBaseline(BaseSearchMethod):
+    """
+    Поиск с использованием BM25 (Best Matching 25)
+    Улучшенная версия TF-IDF, используется в Elasticsearch и других поисковых системах
+    """
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        super().__init__("BM25")
+        self.k1 = k1  # Параметр насыщения TF (обычно 1.2-2.0)
+        self.b = b  # Параметр нормализации длины документа (обычно 0.75)
+        self.text_processor = TextProcessor()
+        self.documents = {}
+        self.doc_ids = []
+        self.doc_lengths = []
+        self.avgdl = 0
+        self.doc_freqs = {}
+        self.idf = {}
+        self.doc_vectors = {}
+        self.total_docs = 0
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Токенизация с использованием нашего процессора"""
+        return self.text_processor.preprocess_basic(text)
+
+    def _calculate_idf(self, documents: List[List[str]]) -> Dict[str, float]:
+        """Расчет IDF (Inverse Document Frequency) для всех термов"""
+        from math import log
+
+        N = len(documents)
+        self.total_docs = N
+        idf = {}
+
+        # Подсчет документной частоты
+        for doc_tokens in documents:
+            unique_tokens = set(doc_tokens)
+            for token in unique_tokens:
+                self.doc_freqs[token] = self.doc_freqs.get(token, 0) + 1
+
+        # Расчет IDF по формуле BM25
+        for token, df in self.doc_freqs.items():
+            # Формула IDF для BM25: log((N - df + 0.5) / (df + 0.5))
+            idf[token] = log((N - df + 0.5) / (df + 0.5))
+
+        return idf
+
+    def index(self, documents: List[Tuple[str, str, Any]]) -> None:
+        """
+        Индексация документов с BM25
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        start_time = time.time()
+        logger.info(f"Начинаем индексацию {len(documents)} документов через BM25")
+
+        # Токенизация и сохранение
+        tokenized_docs = []
+        self.doc_ids = []
+        self.doc_lengths = []
+
+        logger.info("Токенизация документов...")
+        for i, (doc_id, text, metadata) in enumerate(documents):
+            tokens = self._tokenize(text)
+            tokenized_docs.append(tokens)
+            self.doc_ids.append(doc_id)
+            self.doc_lengths.append(len(tokens))
+
+            self.documents[doc_id] = {
+                "text": text,
+                "metadata": metadata,
+                "tokens": tokens,
+            }
+
+            # Создаем вектор документа (частоты термов)
+            doc_vector = {}
+            for token in tokens:
+                doc_vector[token] = doc_vector.get(token, 0) + 1
+            self.doc_vectors[doc_id] = doc_vector
+
+            if (i + 1) % 10 == 0:
+                logger.info(f"Обработано {i + 1}/{len(documents)} документов")
+
+        # Средняя длина документа
+        self.avgdl = np.mean(self.doc_lengths)
+        logger.info(f"Средняя длина документа: {self.avgdl:.1f} токенов")
+
+        # Расчет IDF
+        logger.info("Расчет IDF...")
+        self.idf = self._calculate_idf(tokenized_docs)
+
+        self.indexed_documents = documents
+        self.index_time = time.time() - start_time
+
+        logger.info(f"Индексация BM25 завершена за {self.index_time:.2f} секунд")
+        logger.info(f"Размер словаря: {len(self.idf)}")
+
+    def _score_bm25(self, query_tokens: List[str], doc_id: str) -> float:
+        """Расчет BM25 score для документа"""
+        score = 0.0
+        doc_vector = self.doc_vectors[doc_id]
+        doc_length = len(self.documents[doc_id]["tokens"])
+
+        for token in query_tokens:
+            if token not in self.idf:
+                continue
+
+            # Частота терма в документе
+            tf = doc_vector.get(token, 0)
+
+            # IDF терма
+            idf = self.idf[token]
+
+            # BM25 формула
+            numerator = tf * (self.k1 + 1)
+            denominator = tf + self.k1 * (1 - self.b + self.b * doc_length / self.avgdl)
+
+            score += idf * (numerator / denominator)
+
+        return score
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов по запросу с BM25
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        if not self.doc_ids:
+            logger.error("Индекс пуст. Сначала проиндексируйте документы")
+            return []
+
+        try:
+            # Токенизация запроса
+            query_tokens = self._tokenize(query)
+
+            if not query_tokens:
+                logger.warning("Запрос не содержит значимых токенов")
+                return []
+
+            # Расчет scores для всех документов
+            scores = []
+            for doc_id in self.doc_ids:
+                score = self._score_bm25(query_tokens, doc_id)
+                if score > 0:  # Оптимизация: пропускаем нулевые scores
+                    scores.append((doc_id, score))
+
+            # Сортировка по убыванию score
+            scores.sort(key=lambda x: x[1], reverse=True)
+
+            # Нормализация scores в диапазон [0, 1]
+            if scores:
+                max_score = scores[0][1]
+                if max_score > 0:
+                    # Нормализуем через сигмоидную функцию для лучшей интерпретации
+                    scores = [
+                        (doc_id, 1 / (1 + np.exp(-score / (max_score * 0.5))))
+                        for doc_id, score in scores
+                    ]
+
+            # Создаем результаты
+            results = []
+            for doc_id, score in scores[:top_k]:
+                metadata = self.documents[doc_id].get("metadata", {})
+                results.append(SearchResult(doc_id, float(score), metadata))
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске BM25: {e}")
+            return []
+
+
+# Для обратной совместимости с OpenAI baseline (опциональный)
 class OpenAISearchBaseline(BaseSearchMethod):
     """Поиск с использованием OpenAI embeddings"""
 

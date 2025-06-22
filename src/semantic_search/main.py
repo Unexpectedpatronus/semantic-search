@@ -8,7 +8,7 @@ from typing import Optional
 import click
 from loguru import logger
 
-from semantic_search.config import GUI_CONFIG, SPACY_MODEL
+from semantic_search.config import SPACY_MODEL
 from semantic_search.core.doc2vec_trainer import Doc2VecTrainer
 from semantic_search.core.document_processor import DocumentProcessor
 from semantic_search.core.search_engine import SemanticSearchEngine
@@ -29,69 +29,60 @@ from semantic_search.utils.validators import DataValidator, FileValidator
 performance_monitor = PerformanceMonitor()
 
 
-def main():
-    """Главная функция приложения"""
+def check_dependencies() -> bool:
+    """
+    Проверка критических зависимостей
 
-    notification_manager.start()
+    Returns:
+        True если все зависимости установлены
+    """
+    critical_errors = []
 
-    try:
-        setup_logging()
+    # Проверка SpaCy
+    spacy_info = check_spacy_model_availability()
 
-        # Проверка SpaCy с уведомлением
-        spacy_info = check_spacy_model_availability()
-
-        # Проверяем установку моделей
-        if not spacy_info["spacy_installed"]:
-            notification_manager.error(
-                "SpaCy не установлен",
-                "Установите SpaCy для работы с текстом",
-                "Используйте: pip install spacy",
+    if not spacy_info["spacy_installed"]:
+        critical_errors.append("SpaCy не установлен")
+        notification_manager.error(
+            "SpaCy не установлен",
+            "Установите SpaCy для работы с текстом",
+            "Используйте: pip install spacy",
+        )
+    else:
+        # Проверяем наличие хотя бы одной модели
+        if not (spacy_info["ru_model_loadable"] or spacy_info["en_model_loadable"]):
+            notification_manager.warning(
+                "SpaCy модели не найдены",
+                "Ни одна языковая модель не установлена",
+                "Используйте: poetry run python scripts/setup_spacy.py",
             )
         else:
-            # Проверяем наличие хотя бы одной модели
-            if not (spacy_info["ru_model_loadable"] or spacy_info["en_model_loadable"]):
-                notification_manager.warning(
-                    "SpaCy модели не найдены",
-                    "Ни одна языковая модель не установлена",
-                    "Используйте: poetry run python scripts/setup_spacy.py",
-                )
-            else:
-                # Информируем о доступных моделях
-                models_status = []
-                if spacy_info["ru_model_loadable"]:
-                    models_status.append("русская")
-                if spacy_info["en_model_loadable"]:
-                    models_status.append("английская")
+            # Информируем о доступных моделях
+            models_status = []
+            if spacy_info["ru_model_loadable"]:
+                models_status.append("русская")
+            if spacy_info["en_model_loadable"]:
+                models_status.append("английская")
 
-                notification_manager.success(
-                    "SpaCy готов", f"Загружены модели: {', '.join(models_status)}"
-                )
-
-        # Проверяем доступность PyQt6
-        try:
-            from PyQt6.QtWidgets import QApplication
-
-            from semantic_search.gui.main_window import MainWindow
-        except ImportError as e:
-            logger.error(f"PyQt6 не установлен: {e}")
-            notification_manager.error(
-                "Ошибка импорта",
-                "PyQt6 не установлен",
-                "Установите зависимости: poetry install",
+            notification_manager.success(
+                "SpaCy готов", f"Загружены модели: {', '.join(models_status)}"
             )
-            print("\n❌ PyQt6 не установлен!")
-            print("Установите зависимости командой: poetry install")
-            print("\nВы можете использовать CLI режим:")
-            print("poetry run semantic-search-cli --help")
-            sys.exit(1)
+
+    return len(critical_errors) == 0
+
+
+def init_gui_mode():
+    """Инициализация GUI режима"""
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        from semantic_search.gui.main_window import MainWindow
 
         # Создание приложения Qt
         app = QApplication(sys.argv)
-        app.setApplicationName(GUI_CONFIG["window_title"])
+        app.setApplicationName("Semantic Document Search")
         app.setOrganizationName("Semantic Search")
-
-        # Устанавливаем стиль
-        app.setStyle("Fusion")  # Современный стиль
+        app.setStyle("Fusion")
 
         # Создание и отображение главного окна
         main_window = MainWindow()
@@ -102,6 +93,35 @@ def main():
         # Запуск цикла событий
         exit_code = app.exec()
         logger.info(f"Приложение завершено с кодом: {exit_code}")
+        return exit_code
+
+    except ImportError as e:
+        logger.error(f"PyQt6 не установлен: {e}")
+        notification_manager.error(
+            "Ошибка импорта",
+            "PyQt6 не установлен",
+            "Установите зависимости: poetry install",
+        )
+        print("\n❌ PyQt6 не установлен!")
+        print("Установите зависимости командой: poetry install")
+        print("\nВы можете использовать CLI режим:")
+        print("poetry run semantic-search-cli --help")
+        return 1
+
+
+def main():
+    """Главная функция приложения"""
+    notification_manager.start()
+
+    try:
+        setup_logging()
+
+        # Проверка зависимостей
+        if not check_dependencies():
+            logger.warning("Обнаружены проблемы с зависимостями")
+
+        # Запуск GUI
+        exit_code = init_gui_mode()
         sys.exit(exit_code)
 
     except Exception as e:
@@ -130,15 +150,7 @@ def cli():
 @click.option("--epochs", default=40, help="Количество эпох обучения")
 @click.option("--async-mode", "-a", is_flag=True, help="Асинхронное выполнение")
 def train(documents: str, model: str, vector_size: int, epochs: int, async_mode: bool):
-    """
-    Обучить модель Doc2Vec на корпусе документов
-
-    Args:
-        documents: Путь к папке с документами
-        model: Имя модели для сохранения
-        vector_size: Размерность векторов
-        epochs: Количество эпох обучения
-    """
+    """Обучить модель Doc2Vec на корпусе документов"""
     try:
         # Валидация параметров
         documents_path = DataValidator.validate_directory_path(Path(documents))
@@ -154,8 +166,6 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
 
     def train_task(progress_tracker=None):
         """Задача обучения модели"""
-
-        # Начинаем отсчет общего времени
         start_time = time.time()
 
         with performance_monitor.measure_operation("document_processing"):
@@ -191,9 +201,10 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
             # Обучение модели
             trainer = Doc2VecTrainer()
 
-            # Обучение модели
             trained_model = trainer.train_model(
-                corpus, vector_size=vector_size, epochs=epochs
+                corpus,
+                vector_size=model_params.get("vector_size", vector_size),
+                epochs=model_params.get("epochs", epochs),
             )
 
             if trained_model:
@@ -206,6 +217,10 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
                     "%Y-%m-%d %H:%M:%S", time.localtime(start_time)
                 )
                 trainer.training_metadata["corpus_size"] = len(processed_docs)
+                trainer.training_metadata["documents_base_path"] = str(
+                    documents_path.absolute()
+                )
+
                 trainer.save_model(trained_model, model)
 
                 if progress_tracker:
@@ -234,7 +249,7 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
             name=f"Обучение модели {model}",
             description=f"Обучение на документах из {documents_path}",
             track_progress=True,
-            total_steps=100,  # Примерное количество шагов
+            total_steps=100,
         )
 
         click.echo(f"🔄 Задача обучения запущена (ID: {task_id})")
@@ -276,15 +291,7 @@ def train(documents: str, model: str, vector_size: int, epochs: int, async_mode:
 @click.option("--model", "-m", default="doc2vec_model", help="Имя модели")
 @click.option("--top-k", "-k", default=10, help="Количество результатов")
 def search(documents: str, query: str, model: str, top_k: int):
-    """
-    Поиск по документам
-
-    Args:
-        documents: Путь к папке с документами
-        query: Поисковый запрос
-        model: Имя модели
-        top_k: Количество результатов для вывода
-    """
+    """Поиск по документам"""
     logger.info(f"Режим поиска: {query}")
 
     # Загрузка модели
@@ -319,13 +326,7 @@ def search(documents: str, query: str, model: str, top_k: int):
 @click.option("--documents", "-d", help="Путь к папке с документами")
 @click.option("--model", "-m", default="doc2vec_model", help="Имя модели")
 def stats(documents: Optional[str], model: str):
-    """
-    Показать статистику модели и корпуса
-
-    Args:
-        documents: Путь к папке с документами (опционально)
-        model: Имя модели
-    """
+    """Показать статистику модели и корпуса"""
     # Статистика корпуса
     if documents:
         documents_path = Path(documents)
