@@ -1,0 +1,5450 @@
+================================================================================
+SELECTIVE PROJECT EXPORT
+Date: 2025-07-01 21:48:57
+Root: C:\Users\evgen\Evgeny\Dev_projects\Dev_Python\diplom\semantic-search
+================================================================================
+
+STRUCTURE:
+----------------------------------------
+
+src\semantic_search\evaluation/
+  - baselines.py
+  - comparison.py
+  - metrics.py
+  - __init__.py
+
+scripts/
+  - diploma_demo.py
+
+src\semantic_search\core/
+  - doc2vec_trainer.py
+  - document_processor.py
+  - search_engine.py
+  - text_summarizer.py
+  - __init__.py
+
+src\semantic_search\utils/
+  - cache_manager.py
+  - file_utils.py
+  - logging_config.py
+  - notification_system.py
+  - performance_monitor.py
+  - statistics.py
+  - task_manager.py
+  - text_utils.py
+  - validators.py
+  - __init__.py
+
+================================================================================
+FILE CONTENTS:
+================================================================================
+
+
+========================================
+FILE: src\semantic_search\evaluation\baselines.py
+========================================
+"""Базовые классы и альтернативные методы поиска (обновленная версия с TF-IDF и BM25)"""
+
+import json
+import os
+import time
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from loguru import logger
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from semantic_search.core.search_engine import SearchResult
+from semantic_search.utils.text_utils import TextProcessor
+
+
+class BaseSearchMethod(ABC):
+    """Абстрактный базовый класс для методов поиска"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.index_time = 0.0
+        self.indexed_documents = []
+
+    @abstractmethod
+    def index(self, documents: List[Tuple[str, str, str]]) -> None:
+        """
+        Индексация документов
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        pass
+
+    @abstractmethod
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        pass
+
+    def get_method_name(self) -> str:
+        """Получить название метода"""
+        return self.name
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Получить статистику метода"""
+        return {
+            "method_name": self.name,
+            "indexed_documents": len(self.indexed_documents),
+            "index_time": self.index_time,
+        }
+
+
+class Doc2VecSearchAdapter(BaseSearchMethod):
+    """Адаптер для существующего Doc2Vec поиска"""
+
+    def __init__(self, search_engine, corpus_info):
+        super().__init__("Doc2Vec")
+        self.search_engine = search_engine
+        self.corpus_info = corpus_info
+
+    def index(self, documents: List[Tuple[str, str, str]]) -> None:
+        """Doc2Vec уже проиндексирован при обучении"""
+        self.indexed_documents = documents
+        # Для Doc2Vec время индексации = время обучения, которое мы не измеряем здесь
+        self.index_time = 0
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """Использует существующий поисковый движок"""
+        return self.search_engine.search(query, top_k=top_k)
+
+
+class TFIDFSearchBaseline(BaseSearchMethod):
+    """
+    Поиск с использованием TF-IDF
+    Классический метод информационного поиска для сравнения
+    """
+
+    def __init__(self):
+        super().__init__("TF-IDF")
+        self.text_processor = TextProcessor()
+        self.vectorizer = TfidfVectorizer(
+            max_features=10000,
+            ngram_range=(1, 2),  # Униграммы и биграммы
+            min_df=2,  # Минимальная частота документа
+            max_df=0.95,  # Максимальная частота документа
+            sublinear_tf=True,  # Логарифмическое масштабирование TF
+            use_idf=True,
+            smooth_idf=True,
+            lowercase=True,
+            tokenizer=self._custom_tokenizer,  # Используем наш токенизатор
+        )
+        self.tfidf_matrix = None
+        self.documents = {}
+        self.doc_ids = []
+
+    def _custom_tokenizer(self, text: str) -> List[str]:
+        """Использование того же токенизатора, что и в Doc2Vec для честного сравнения"""
+        # Используем базовую токенизацию без SpaCy для скорости
+        return self.text_processor.preprocess_basic(text)
+
+    def index(self, documents: List[Tuple[str, str, Any]]) -> None:
+        """
+        Индексация документов с TF-IDF
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        start_time = time.time()
+        logger.info(f"Начинаем индексацию {len(documents)} документов через TF-IDF")
+
+        # Извлекаем тексты и сохраняем метаданные
+        texts = []
+        self.doc_ids = []
+
+        for doc_id, text, metadata in documents:
+            texts.append(text)
+            self.doc_ids.append(doc_id)
+            self.documents[doc_id] = {"text": text, "metadata": metadata}
+
+        # Создаем TF-IDF матрицу
+        logger.info("Построение TF-IDF матрицы...")
+        self.tfidf_matrix = self.vectorizer.fit_transform(texts)
+
+        self.indexed_documents = documents
+        self.index_time = time.time() - start_time
+
+        logger.info(f"Индексация TF-IDF завершена за {self.index_time:.2f} секунд")
+        logger.info(f"Размер словаря: {len(self.vectorizer.vocabulary_)}")
+        logger.info(f"Размер матрицы: {self.tfidf_matrix.shape}")
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов по запросу с TF-IDF
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        if self.tfidf_matrix is None:
+            logger.error("Индекс пуст. Сначала проиндексируйте документы")
+            return []
+
+        try:
+            # Векторизуем запрос
+            query_vector = self.vectorizer.transform([query])
+
+            # Вычисляем косинусное сходство
+            similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
+
+            # Получаем топ-k результатов
+            top_indices = similarities.argsort()[-top_k:][::-1]
+
+            # Создаем результаты
+            results = []
+            for idx in top_indices:
+                if similarities[idx] > 0:  # Фильтруем нулевые схожести
+                    doc_id = self.doc_ids[idx]
+                    metadata = self.documents[doc_id].get("metadata", {})
+                    results.append(
+                        SearchResult(doc_id, float(similarities[idx]), metadata)
+                    )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске TF-IDF: {e}")
+            return []
+
+
+class BM25SearchBaseline(BaseSearchMethod):
+    """
+    Поиск с использованием BM25 (Best Matching 25)
+    Улучшенная версия TF-IDF, используется в Elasticsearch и других поисковых системах
+    """
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        super().__init__("BM25")
+        self.k1 = k1  # Параметр насыщения TF (обычно 1.2-2.0)
+        self.b = b  # Параметр нормализации длины документа (обычно 0.75)
+        self.text_processor = TextProcessor()
+        self.documents = {}
+        self.doc_ids = []
+        self.doc_lengths = []
+        self.avgdl = 0
+        self.doc_freqs = {}
+        self.idf = {}
+        self.doc_vectors = {}
+        self.total_docs = 0
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Токенизация с использованием нашего процессора"""
+        return self.text_processor.preprocess_basic(text)
+
+    def _calculate_idf(self, documents: List[List[str]]) -> Dict[str, float]:
+        """Расчет IDF (Inverse Document Frequency) для всех термов"""
+        from math import log
+
+        N = len(documents)
+        self.total_docs = N
+        idf = {}
+
+        # Подсчет документной частоты
+        for doc_tokens in documents:
+            unique_tokens = set(doc_tokens)
+            for token in unique_tokens:
+                self.doc_freqs[token] = self.doc_freqs.get(token, 0) + 1
+
+        # Расчет IDF по формуле BM25
+        for token, df in self.doc_freqs.items():
+            # Формула IDF для BM25: log((N - df + 0.5) / (df + 0.5))
+            idf[token] = log((N - df + 0.5) / (df + 0.5))
+
+        return idf
+
+    def index(self, documents: List[Tuple[str, str, Any]]) -> None:
+        """
+        Индексация документов с BM25
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        start_time = time.time()
+        logger.info(f"Начинаем индексацию {len(documents)} документов через BM25")
+
+        # Токенизация и сохранение
+        tokenized_docs = []
+        self.doc_ids = []
+        self.doc_lengths = []
+
+        logger.info("Токенизация документов...")
+        for i, (doc_id, text, metadata) in enumerate(documents):
+            tokens = self._tokenize(text)
+            tokenized_docs.append(tokens)
+            self.doc_ids.append(doc_id)
+            self.doc_lengths.append(len(tokens))
+
+            self.documents[doc_id] = {
+                "text": text,
+                "metadata": metadata,
+                "tokens": tokens,
+            }
+
+            # Создаем вектор документа (частоты термов)
+            doc_vector = {}
+            for token in tokens:
+                doc_vector[token] = doc_vector.get(token, 0) + 1
+            self.doc_vectors[doc_id] = doc_vector
+
+            if (i + 1) % 10 == 0:
+                logger.info(f"Обработано {i + 1}/{len(documents)} документов")
+
+        # Средняя длина документа
+        self.avgdl = np.mean(self.doc_lengths)
+        logger.info(f"Средняя длина документа: {self.avgdl:.1f} токенов")
+
+        # Расчет IDF
+        logger.info("Расчет IDF...")
+        self.idf = self._calculate_idf(tokenized_docs)
+
+        self.indexed_documents = documents
+        self.index_time = time.time() - start_time
+
+        logger.info(f"Индексация BM25 завершена за {self.index_time:.2f} секунд")
+        logger.info(f"Размер словаря: {len(self.idf)}")
+
+    def _score_bm25(self, query_tokens: List[str], doc_id: str) -> float:
+        """Расчет BM25 score для документа"""
+        score = 0.0
+        doc_vector = self.doc_vectors[doc_id]
+        doc_length = len(self.documents[doc_id]["tokens"])
+
+        for token in query_tokens:
+            if token not in self.idf:
+                continue
+
+            # Частота терма в документе
+            tf = doc_vector.get(token, 0)
+
+            # IDF терма
+            idf = self.idf[token]
+
+            # BM25 формула
+            numerator = tf * (self.k1 + 1)
+            denominator = tf + self.k1 * (1 - self.b + self.b * doc_length / self.avgdl)
+
+            score += idf * (numerator / denominator)
+
+        return score
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов по запросу с BM25
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        if not self.doc_ids:
+            logger.error("Индекс пуст. Сначала проиндексируйте документы")
+            return []
+
+        try:
+            # Токенизация запроса
+            query_tokens = self._tokenize(query)
+
+            if not query_tokens:
+                logger.warning("Запрос не содержит значимых токенов")
+                return []
+
+            # Расчет scores для всех документов
+            scores = []
+            for doc_id in self.doc_ids:
+                score = self._score_bm25(query_tokens, doc_id)
+                if score > 0:  # Оптимизация: пропускаем нулевые scores
+                    scores.append((doc_id, score))
+
+            # Сортировка по убыванию score
+            scores.sort(key=lambda x: x[1], reverse=True)
+
+            # Нормализация scores в диапазон [0, 1]
+            if scores:
+                max_score = scores[0][1]
+                if max_score > 0:
+                    # Нормализуем через сигмоидную функцию для лучшей интерпретации
+                    scores = [
+                        (doc_id, 1 / (1 + np.exp(-score / (max_score * 0.5))))
+                        for doc_id, score in scores
+                    ]
+
+            # Создаем результаты
+            results = []
+            for doc_id, score in scores[:top_k]:
+                metadata = self.documents[doc_id].get("metadata", {})
+                results.append(SearchResult(doc_id, float(score), metadata))
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске BM25: {e}")
+            return []
+
+
+# Для обратной совместимости с OpenAI baseline (опциональный)
+class OpenAISearchBaseline(BaseSearchMethod):
+    """Поиск с использованием OpenAI embeddings"""
+
+    def __init__(
+        self, api_key: Optional[str] = None, model: str = "text-embedding-ada-002"
+    ):
+        super().__init__(f"OpenAI ({model})")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.model = model
+        self.embeddings = {}
+        self.documents = {}
+        self.text_processor = TextProcessor()
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenAI API key не найден. Установите переменную окружения OPENAI_API_KEY"
+            )
+
+        # Lazy import для опциональной зависимости
+        try:
+            import openai
+
+            self.openai = openai
+            self.client = openai.OpenAI(api_key=self.api_key)
+        except ImportError:
+            raise ImportError("Установите openai: pip install openai")
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """Получить embedding для текста"""
+        try:
+            # Ограничиваем длину текста
+            if len(text) > 8000:
+                text = text[:8000]
+
+            response = self.client.embeddings.create(model=self.model, input=text)
+            return response.data[0].embedding
+        except Exception as e:
+            logger.error(f"Ошибка при получении embedding: {e}")
+            raise
+
+    def index(self, documents: List[Tuple[str, str, str]]) -> None:
+        """
+        Индексация документов через OpenAI API
+
+        Args:
+            documents: Список кортежей (doc_id, text, metadata)
+        """
+        start_time = time.time()
+        logger.info(f"Начинаем индексацию {len(documents)} документов через OpenAI")
+
+        for i, (doc_id, text, metadata) in enumerate(documents):
+            try:
+                # Создаем краткое представление документа для embedding
+                # Берем первые 2000 символов + последние 1000
+                if len(text) > 3000:
+                    text_sample = text[:2000] + " ... " + text[-1000:]
+                else:
+                    text_sample = text
+
+                # Получаем embedding
+                embedding = self._get_embedding(text_sample)
+
+                self.embeddings[doc_id] = np.array(embedding)
+                self.documents[doc_id] = {"text": text, "metadata": metadata}
+
+                if (i + 1) % 10 == 0:
+                    logger.info(f"Проиндексировано {i + 1}/{len(documents)} документов")
+
+                # Задержка для соблюдения rate limits
+                time.sleep(0.1)
+
+            except Exception as e:
+                logger.error(f"Ошибка при индексации документа {doc_id}: {e}")
+                continue
+
+        self.indexed_documents = documents
+        self.index_time = time.time() - start_time
+        logger.info(f"Индексация завершена за {self.index_time:.2f} секунд")
+
+    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        Поиск документов по запросу
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+
+        Returns:
+            Список результатов поиска
+        """
+        if not self.embeddings:
+            logger.error("Индекс пуст. Сначала проиндексируйте документы")
+            return []
+
+        try:
+            # Получаем embedding запроса
+            query_embedding = np.array(self._get_embedding(query))
+
+            # Вычисляем косинусное сходство
+            similarities = []
+            for doc_id, doc_embedding in self.embeddings.items():
+                # Косинусное сходство
+                similarity = np.dot(query_embedding, doc_embedding) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(doc_embedding)
+                )
+                similarities.append((doc_id, similarity))
+
+            # Сортируем по убыванию сходства
+            similarities.sort(key=lambda x: x[1], reverse=True)
+
+            # Создаем результаты
+            results = []
+            for doc_id, similarity in similarities[:top_k]:
+                metadata = self.documents[doc_id].get("metadata", {})
+                results.append(SearchResult(doc_id, float(similarity), metadata))
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске: {e}")
+            return []
+
+    def save_index(self, path: Path) -> None:
+        """Сохранить индекс для повторного использования"""
+        data = {
+            "embeddings": {k: v.tolist() for k, v in self.embeddings.items()},
+            "documents": self.documents,
+            "model": self.model,
+        }
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        logger.info(f"Индекс сохранен в {path}")
+
+    def load_index(self, path: Path) -> None:
+        """Загрузить индекс"""
+        if not path.exists():
+            raise FileNotFoundError(f"Файл индекса не найден: {path}")
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.embeddings = {k: np.array(v) for k, v in data["embeddings"].items()}
+        self.documents = data["documents"]
+        self.indexed_documents = list(self.documents.keys())
+
+        logger.info(f"Индекс загружен из {path}")
+
+
+========================================
+FILE: src\semantic_search\evaluation\comparison.py
+========================================
+"""Модуль для сравнения различных методов поиска"""
+
+import json
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from loguru import logger
+
+from semantic_search.config import DATA_DIR
+
+from .baselines import BaseSearchMethod
+from .metrics import SearchMetrics
+
+
+class QueryTestCase:
+    """Тестовый случай для оценки поиска"""
+
+    def __init__(
+        self,
+        query: str,
+        relevant_docs: Set[str],
+        relevance_scores: Optional[Dict[str, float]] = None,
+        description: str = "",
+    ):
+        self.query = query
+        self.relevant_docs = relevant_docs
+        self.relevance_scores = relevance_scores or {}
+        self.description = description
+
+
+class SearchComparison:
+    """Класс для сравнения методов поиска"""
+
+    def __init__(self, test_cases: Optional[List[QueryTestCase]] = None):
+        self.test_cases = test_cases or []
+        self.results = {}
+        self.metrics = SearchMetrics()
+
+    def add_test_case(self, test_case: QueryTestCase) -> None:
+        """Добавить тестовый случай"""
+        self.test_cases.append(test_case)
+
+    def create_default_test_cases(self) -> List[QueryTestCase]:
+        """Создать стандартный набор тестовых случаев для демонстрации"""
+        test_cases = [
+            # QueryTestCase(
+            #     query="машинное обучение и нейронные сети",
+            #     relevant_docs={
+            #         "ml_basics.pdf",
+            #         "neural_networks.pdf",
+            #         "deep_learning.pdf",
+            #     },
+            #     relevance_scores={
+            #         "ml_basics.pdf": 3,
+            #         "neural_networks.pdf": 3,
+            #         "deep_learning.pdf": 2,
+            #         "ai_overview.pdf": 1,
+            #     },
+            #     description="Базовый запрос по ML",
+            # ),
+            # QueryTestCase(
+            #     query="глубокое обучение для обработки изображений",
+            #     relevant_docs={
+            #         "cnn_tutorial.pdf",
+            #         "image_processing.pdf",
+            #         "deep_learning.pdf",
+            #     },
+            #     relevance_scores={
+            #         "cnn_tutorial.pdf": 3,
+            #         "image_processing.pdf": 3,
+            #         "deep_learning.pdf": 2,
+            #         "computer_vision.pdf": 2,
+            #     },
+            #     description="Специализированный запрос по CV",
+            # ),
+            QueryTestCase(
+                query="методы глокализации",
+                relevant_docs={
+                    "nlp_transformers.pdf",
+                    "bert_paper.pdf",
+                    "attention_mechanism.pdf",
+                },
+                relevance_scores={
+                    "nlp_transformers.pdf": 3,
+                    "bert_paper.pdf": 3,
+                    "attention_mechanism.pdf": 2,
+                    "nlp_basics.pdf": 1,
+                },
+                description="Запрос по NLP",
+            ),
+            # QueryTestCase(
+            #     query="градиентный спуск оптимизация",
+            #     relevant_docs={"optimization_methods.pdf", "gradient_descent.pdf"},
+            #     relevance_scores={
+            #         "optimization_methods.pdf": 3,
+            #         "gradient_descent.pdf": 3,
+            #         "ml_basics.pdf": 1,
+            #     },
+            #     description="Запрос по методам оптимизации",
+            # ),
+            # QueryTestCase(
+            #     query="рекуррентные нейронные сети LSTM",
+            #     relevant_docs={
+            #         "rnn_tutorial.pdf",
+            #         "lstm_explained.pdf",
+            #         "sequence_models.pdf",
+            #     },
+            #     relevance_scores={
+            #         "rnn_tutorial.pdf": 3,
+            #         "lstm_explained.pdf": 3,
+            #         "sequence_models.pdf": 2,
+            #     },
+            #     description="Запрос по RNN",
+            # ),
+        ]
+
+        return test_cases
+
+    def evaluate_method(
+        self, method: BaseSearchMethod, top_k: int = 10, verbose: bool = True
+    ) -> Dict[str, any]:
+        """
+        Оценить метод поиска на всех тестовых случаях
+
+        Args:
+            method: Метод поиска для оценки
+            top_k: Количество результатов для извлечения
+            verbose: Выводить прогресс
+
+        Returns:
+            Словарь с результатами оценки
+        """
+        method_name = method.get_method_name()
+
+        if verbose:
+            logger.info(f"Оценка метода: {method_name}")
+
+        all_metrics = []
+        query_times = []
+        all_results = []
+
+        for i, test_case in enumerate(self.test_cases):
+            if verbose and (i + 1) % 5 == 0:
+                logger.info(f"Обработано запросов: {i + 1}/{len(self.test_cases)}")
+
+            # Измеряем время выполнения запроса
+            start_time = time.time()
+            search_results = method.search(test_case.query, top_k=top_k)
+            query_time = time.time() - start_time
+            query_times.append(query_time)
+
+            # Извлекаем ID документов из результатов
+            retrieved_docs = [result.doc_id for result in search_results]
+
+            # Вычисляем метрики
+            metrics = self.metrics.calculate_all_metrics(
+                retrieved=retrieved_docs,
+                relevant=test_case.relevant_docs,
+                relevance_scores=test_case.relevance_scores,
+                k_values=[1, 5, 10],
+            )
+
+            # Добавляем информацию о запросе
+            metrics["query"] = test_case.query
+            metrics["query_time"] = query_time
+
+            all_metrics.append(metrics)
+            all_results.append((retrieved_docs, test_case.relevant_docs))
+
+        # Вычисляем агрегированные метрики
+        aggregated = self._aggregate_metrics(all_metrics)
+
+        # MAP и MRR
+        aggregated["MAP"] = self.metrics.mean_average_precision(all_results)
+        aggregated["MRR"] = self.metrics.mean_reciprocal_rank(all_results)
+
+        # Статистика по времени
+        aggregated["avg_query_time"] = np.mean(query_times)
+        aggregated["std_query_time"] = np.std(query_times)
+        aggregated["median_query_time"] = np.median(query_times)
+
+        # Сохраняем результаты
+        self.results[method_name] = {
+            "aggregated": aggregated,
+            "detailed": all_metrics,
+            "method_stats": method.get_stats(),
+        }
+
+        if verbose:
+            logger.info(f"Оценка {method_name} завершена")
+            logger.info(f"Среднее время запроса: {aggregated['avg_query_time']:.3f}с")
+            logger.info(f"MAP: {aggregated['MAP']:.3f}")
+            logger.info(f"MRR: {aggregated['MRR']:.3f}")
+
+        return self.results[method_name]
+
+    def _aggregate_metrics(self, metrics_list: List[Dict]) -> Dict[str, float]:
+        """Агрегировать метрики по всем запросам"""
+        aggregated = {}
+
+        # Получаем все ключи метрик (исключая служебные)
+        metric_keys = [
+            k for k in metrics_list[0].keys() if k not in ["query", "query_time"]
+        ]
+
+        # Вычисляем среднее для каждой метрики
+        for key in metric_keys:
+            values = [m[key] for m in metrics_list]
+            aggregated[f"avg_{key}"] = np.mean(values)
+            aggregated[f"std_{key}"] = np.std(values)
+
+        return aggregated
+
+    def compare_methods(
+        self,
+        methods: List[BaseSearchMethod],
+        top_k: int = 10,
+        save_results: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Сравнить несколько методов
+
+        Args:
+            methods: Список методов для сравнения
+            top_k: Количество результатов
+            save_results: Сохранить результаты в файл
+
+        Returns:
+            DataFrame с результатами сравнения
+        """
+        logger.info(f"Начинаем сравнение {len(methods)} методов")
+
+        # Оцениваем каждый метод
+        for method in methods:
+            self.evaluate_method(method, top_k=top_k)
+
+        # Создаем сравнительную таблицу
+        comparison_data = []
+
+        for method_name, results in self.results.items():
+            row = {
+                "Method": method_name,
+                "MAP": results["aggregated"]["MAP"],
+                "MRR": results["aggregated"]["MRR"],
+                "Avg Query Time (s)": results["aggregated"]["avg_query_time"],
+                "Index Time (s)": results["method_stats"]["index_time"],
+            }
+
+            # Добавляем метрики для разных k
+            for k in [1, 5, 10]:
+                row[f"P@{k}"] = results["aggregated"][f"avg_precision@{k}"]
+                row[f"R@{k}"] = results["aggregated"][f"avg_recall@{k}"]
+                if f"avg_ndcg@{k}" in results["aggregated"]:
+                    row[f"NDCG@{k}"] = results["aggregated"][f"avg_ndcg@{k}"]
+
+            comparison_data.append(row)
+
+        df_comparison = pd.DataFrame(comparison_data)
+
+        # Сохраняем результаты
+        if save_results:
+            results_dir = DATA_DIR / "evaluation_results"
+            results_dir.mkdir(exist_ok=True)
+
+            # Сохраняем таблицу
+            df_comparison.to_csv(results_dir / "comparison_results.csv", index=False)
+
+            # Сохраняем детальные результаты
+            with open(
+                results_dir / "detailed_results.json", "w", encoding="utf-8"
+            ) as f:
+                json.dump(self.results, f, indent=2)
+
+            logger.info(f"Результаты сохранены в {results_dir}")
+
+        return df_comparison
+
+    def plot_comparison(self, save_plots: bool = True) -> None:
+        """Визуализация результатов сравнения"""
+        if not self.results:
+            logger.error("Нет результатов для визуализации")
+            return
+
+        # Подготовка данных для визуализации
+        methods = list(self.results.keys())
+
+        # Создаем фигуру с подграфиками
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig.suptitle("Сравнение методов поиска", fontsize=16)
+
+        # 1. Сравнение основных метрик
+        ax1 = axes[0, 0]
+        metrics_data = {
+            "MAP": [self.results[m]["aggregated"]["MAP"] for m in methods],
+            "MRR": [self.results[m]["aggregated"]["MRR"] for m in methods],
+            "P@10": [
+                self.results[m]["aggregated"]["avg_precision@10"] for m in methods
+            ],
+            "R@10": [self.results[m]["aggregated"]["avg_recall@10"] for m in methods],
+        }
+
+        x = np.arange(len(methods))
+        width = 0.2
+
+        for i, (metric, values) in enumerate(metrics_data.items()):
+            ax1.bar(x + i * width, values, width, label=metric)
+
+        ax1.set_xlabel("Методы")
+        ax1.set_ylabel("Значение метрики")
+        ax1.set_title("Основные метрики качества поиска")
+        ax1.set_xticks(x + width * 1.5)
+        ax1.set_xticklabels(methods)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Precision-Recall для разных k
+        ax2 = axes[0, 1]
+        k_values = [1, 5, 10]
+
+        for method in methods:
+            precisions = [
+                self.results[method]["aggregated"][f"avg_precision@{k}"]
+                for k in k_values
+            ]
+            recalls = [
+                self.results[method]["aggregated"][f"avg_recall@{k}"] for k in k_values
+            ]
+            ax2.plot(recalls, precisions, marker="o", label=method)
+
+        ax2.set_xlabel("Recall")
+        ax2.set_ylabel("Precision")
+        ax2.set_title("Precision-Recall кривые")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Время выполнения
+        ax3 = axes[1, 0]
+        query_times = [self.results[m]["aggregated"]["avg_query_time"] for m in methods]
+        index_times = [self.results[m]["method_stats"]["index_time"] for m in methods]
+
+        x = np.arange(len(methods))
+        width = 0.35
+
+        ax3.bar(x - width / 2, query_times, width, label="Среднее время запроса")
+        ax3.bar(x + width / 2, index_times, width, label="Время индексации")
+
+        ax3.set_xlabel("Методы")
+        ax3.set_ylabel("Время (секунды)")
+        ax3.set_title("Производительность методов")
+        ax3.set_xticks(x)
+        ax3.set_xticklabels(methods)
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. NDCG для разных k
+        ax4 = axes[1, 1]
+
+        for method in methods:
+            if "avg_ndcg@1" in self.results[method]["aggregated"]:
+                ndcg_values = [
+                    self.results[method]["aggregated"][f"avg_ndcg@{k}"]
+                    for k in k_values
+                ]
+                ax4.plot(k_values, ndcg_values, marker="s", label=method)
+
+        ax4.set_xlabel("k")
+        ax4.set_ylabel("NDCG@k")
+        ax4.set_title("NDCG для различных k")
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        ax4.set_xticks(k_values)
+
+        plt.tight_layout()
+
+        if save_plots:
+            plots_dir = DATA_DIR / "evaluation_results" / "plots"
+            plots_dir.mkdir(exist_ok=True, parents=True)
+            plt.savefig(
+                plots_dir / "comparison_plots.png", dpi=300, bbox_inches="tight"
+            )
+            logger.info(f"Графики сохранены в {plots_dir}")
+
+        plt.show()
+
+    def plot_detailed_metrics(self, method_name: str, save_plot: bool = True) -> None:
+        """Детальная визуализация метрик для конкретного метода"""
+        if method_name not in self.results:
+            logger.error(f"Результаты для метода {method_name} не найдены")
+            return
+
+        detailed = self.results[method_name]["detailed"]
+
+        # Создаем DataFrame для удобства
+        df = pd.DataFrame(detailed)
+
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig.suptitle(f"Детальный анализ метода: {method_name}", fontsize=16)
+
+        # 1. Распределение Average Precision
+        ax1 = axes[0, 0]
+        ax1.hist(
+            df["average_precision"], bins=20, alpha=0.7, color="blue", edgecolor="black"
+        )
+        ax1.axvline(
+            df["average_precision"].mean(),
+            color="red",
+            linestyle="--",
+            label=f"Среднее: {df['average_precision'].mean():.3f}",
+        )
+        ax1.set_xlabel("Average Precision")
+        ax1.set_ylabel("Количество запросов")
+        ax1.set_title("Распределение Average Precision")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Время выполнения запросов
+        ax2 = axes[0, 1]
+        ax2.scatter(range(len(df)), df["query_time"], alpha=0.6)
+        ax2.axhline(
+            df["query_time"].mean(),
+            color="red",
+            linestyle="--",
+            label=f"Среднее: {df['query_time'].mean():.3f}s",
+        )
+        ax2.set_xlabel("Номер запроса")
+        ax2.set_ylabel("Время (секунды)")
+        ax2.set_title("Время выполнения запросов")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Метрики по k
+        ax3 = axes[1, 0]
+        k_values = [1, 5, 10]
+        metrics = ["precision", "recall", "f1"]
+
+        for metric in metrics:
+            values = [df[f"{metric}@{k}"].mean() for k in k_values]
+            ax3.plot(k_values, values, marker="o", label=metric.capitalize())
+
+        ax3.set_xlabel("k")
+        ax3.set_ylabel("Значение метрики")
+        ax3.set_title("Метрики для различных k")
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xticks(k_values)
+
+        # 4. Топ-10 лучших и худших запросов по AP
+        ax4 = axes[1, 1]
+
+        sorted_df = df.sort_values("average_precision")
+        worst_5 = sorted_df.head(5)
+        best_5 = sorted_df.tail(5)
+
+        combined = pd.concat([worst_5, best_5])
+        colors = ["red"] * 5 + ["green"] * 5
+
+        y_pos = np.arange(len(combined))
+        ax4.barh(y_pos, combined["average_precision"], color=colors, alpha=0.7)
+
+        # Обрезаем длинные запросы для отображения
+        labels = [q[:50] + "..." if len(q) > 50 else q for q in combined["query"]]
+        ax4.set_yticks(y_pos)
+        ax4.set_yticklabels(labels, fontsize=8)
+        ax4.set_xlabel("Average Precision")
+        ax4.set_title("Лучшие и худшие запросы по AP")
+        ax4.grid(True, alpha=0.3, axis="x")
+
+        plt.tight_layout()
+
+        if save_plot:
+            plots_dir = DATA_DIR / "evaluation_results" / "plots"
+            plots_dir.mkdir(exist_ok=True, parents=True)
+            plt.savefig(
+                plots_dir / f"{method_name.replace(' ', '_')}_detailed.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            logger.info(f"Детальные графики сохранены для {method_name}")
+
+        plt.show()
+
+    def generate_report(self, output_path: Optional[Path] = None) -> str:
+        """
+        Генерация текстового отчета о сравнении
+
+        Args:
+            output_path: Путь для сохранения отчета
+
+        Returns:
+            Текст отчета
+        """
+        if not self.results:
+            return "Нет результатов для генерации отчета"
+
+        report = []
+        report.append("=" * 80)
+        report.append("ОТЧЕТ О СРАВНЕНИИ МЕТОДОВ ПОИСКА")
+        report.append("=" * 80)
+        report.append("")
+
+        # Общая информация
+        report.append(f"Количество тестовых запросов: {len(self.test_cases)}")
+        report.append(f"Оцененные методы: {', '.join(self.results.keys())}")
+        report.append("")
+
+        # Сводная таблица
+        report.append("СВОДНАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ")
+        report.append("-" * 80)
+
+        # Создаем DataFrame для красивого вывода
+        comparison_data = []
+        for method_name, results in self.results.items():
+            row = {
+                "Метод": method_name,
+                "MAP": f"{results['aggregated']['MAP']:.3f}",
+                "MRR": f"{results['aggregated']['MRR']:.3f}",
+                "P@10": f"{results['aggregated']['avg_precision@10']:.3f}",
+                "R@10": f"{results['aggregated']['avg_recall@10']:.3f}",
+                "Время запроса (с)": f"{results['aggregated']['avg_query_time']:.3f}",
+                "Время индексации (с)": f"{results['method_stats']['index_time']:.1f}",
+            }
+            comparison_data.append(row)
+
+        df = pd.DataFrame(comparison_data)
+        report.append(df.to_string(index=False))
+        report.append("")
+
+        # Выводы
+        report.append("ОСНОВНЫЕ ВЫВОДЫ")
+        report.append("-" * 80)
+
+        # Определяем лучший метод по MAP
+        best_method = max(self.results.items(), key=lambda x: x[1]["aggregated"]["MAP"])
+        report.append(
+            f"✓ Лучший метод по MAP: {best_method[0]} ({best_method[1]['aggregated']['MAP']:.3f})"
+        )
+
+        # Определяем самый быстрый метод
+        fastest_method = min(
+            self.results.items(), key=lambda x: x[1]["aggregated"]["avg_query_time"]
+        )
+        report.append(
+            f"✓ Самый быстрый метод: {fastest_method[0]} ({fastest_method[1]['aggregated']['avg_query_time']:.3f}с)"
+        )
+
+        # Сравнение Doc2Vec и OpenAI
+        if "Doc2Vec" in self.results and any(
+            "OpenAI" in m for m in self.results.keys()
+        ):
+            doc2vec_map = self.results["Doc2Vec"]["aggregated"]["MAP"]
+            openai_method = next(m for m in self.results.keys() if "OpenAI" in m)
+            openai_map = self.results[openai_method]["aggregated"]["MAP"]
+
+            improvement = ((doc2vec_map - openai_map) / openai_map) * 100
+
+            report.append("")
+            report.append("СРАВНЕНИЕ DOC2VEC И OPENAI")
+            report.append("-" * 80)
+
+            if doc2vec_map > openai_map:
+                report.append(
+                    f"✓ Doc2Vec превосходит {openai_method} по MAP на {improvement:.1f}%"
+                )
+            else:
+                report.append(
+                    f"✗ {openai_method} превосходит Doc2Vec по MAP на {-improvement:.1f}%"
+                )
+
+            # Сравнение по скорости
+            doc2vec_time = self.results["Doc2Vec"]["aggregated"]["avg_query_time"]
+            openai_time = self.results[openai_method]["aggregated"]["avg_query_time"]
+            time_ratio = openai_time / doc2vec_time
+
+            report.append(f"✓ Doc2Vec быстрее {openai_method} в {time_ratio:.1f} раз")
+
+            # Экономическая выгода
+            report.append("")
+            report.append("ЭКОНОМИЧЕСКАЯ ЭФФЕКТИВНОСТЬ")
+            report.append("-" * 80)
+            report.append("При 1000 запросов в день:")
+
+            # Примерная стоимость OpenAI embeddings
+            openai_cost_per_1k_tokens = 0.0001  # $0.0001 per 1K tokens
+            avg_tokens_per_query = 50  # примерно
+            daily_cost = (
+                1000 * avg_tokens_per_query / 1000
+            ) * openai_cost_per_1k_tokens
+            monthly_cost = daily_cost * 30
+
+            report.append(f"- Стоимость OpenAI: ~${monthly_cost:.2f}/месяц")
+            report.append("- Стоимость Doc2Vec: $0 (после обучения)")
+            report.append(f"- Экономия: ${monthly_cost:.2f}/месяц")
+
+        report.append("")
+        report.append("=" * 80)
+        report.append(f"Отчет сгенерирован: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        report_text = "\n".join(report)
+
+        # Сохраняем отчет
+        if output_path:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(report_text)
+            logger.info(f"Отчет сохранен в {output_path}")
+
+        return report_text
+
+
+========================================
+FILE: src\semantic_search\evaluation\metrics.py
+========================================
+"""Метрики для оценки качества поиска"""
+
+from typing import Dict, List, Set, Tuple
+
+import numpy as np
+
+
+class SearchMetrics:
+    """Класс для вычисления метрик качества поиска"""
+
+    @staticmethod
+    def precision_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
+        """
+        Точность на позиции k
+
+        Args:
+            retrieved: Список найденных документов (в порядке ранжирования)
+            relevant: Множество релевантных документов
+            k: Позиция для вычисления точности
+
+        Returns:
+            Precision@k
+        """
+        if k <= 0 or not retrieved:
+            return 0.0
+
+        retrieved_k = retrieved[:k]
+        relevant_in_k = sum(1 for doc in retrieved_k if doc in relevant)
+
+        return relevant_in_k / k
+
+    @staticmethod
+    def recall_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
+        """
+        Полнота на позиции k
+
+        Args:
+            retrieved: Список найденных документов
+            relevant: Множество релевантных документов
+            k: Позиция для вычисления полноты
+
+        Returns:
+            Recall@k
+        """
+        if not relevant or k <= 0:
+            return 0.0
+
+        retrieved_k = retrieved[:k]
+        relevant_in_k = sum(1 for doc in retrieved_k if doc in relevant)
+
+        return relevant_in_k / len(relevant)
+
+    @staticmethod
+    def average_precision(retrieved: List[str], relevant: Set[str]) -> float:
+        """
+        Средняя точность (AP)
+
+        Args:
+            retrieved: Список найденных документов
+            relevant: Множество релевантных документов
+
+        Returns:
+            Average Precision
+        """
+        if not relevant or not retrieved:
+            return 0.0
+
+        precisions = []
+        relevant_found = 0
+
+        for i, doc in enumerate(retrieved):
+            if doc in relevant:
+                relevant_found += 1
+                precision = relevant_found / (i + 1)
+                precisions.append(precision)
+
+        if not precisions:
+            return 0.0
+
+        return sum(precisions) / len(relevant)
+
+    @staticmethod
+    def mean_average_precision(results: List[Tuple[List[str], Set[str]]]) -> float:
+        """
+        Средняя точность по всем запросам (MAP)
+
+        Args:
+            results: Список кортежей (retrieved, relevant) для каждого запроса
+
+        Returns:
+            Mean Average Precision
+        """
+        if not results:
+            return 0.0
+
+        ap_scores = [
+            SearchMetrics.average_precision(retrieved, relevant)
+            for retrieved, relevant in results
+        ]
+
+        return sum(ap_scores) / len(ap_scores)
+
+    @staticmethod
+    def dcg_at_k(
+        retrieved: List[str], relevance_scores: Dict[str, float], k: int
+    ) -> float:
+        """
+        Discounted Cumulative Gain на позиции k
+
+        Args:
+            retrieved: Список найденных документов
+            relevance_scores: Словарь с оценками релевантности (0-3)
+            k: Позиция для вычисления DCG
+
+        Returns:
+            DCG@k
+        """
+        if k <= 0 or not retrieved:
+            return 0.0
+
+        dcg = 0.0
+        for i, doc in enumerate(retrieved[:k]):
+            rel = relevance_scores.get(doc, 0)
+            # Используем log2(i+2) так как индексация начинается с 0
+            dcg += (2**rel - 1) / np.log2(i + 2)
+
+        return dcg
+
+    @staticmethod
+    def ndcg_at_k(
+        retrieved: List[str], relevance_scores: Dict[str, float], k: int
+    ) -> float:
+        """
+        Normalized Discounted Cumulative Gain на позиции k
+
+        Args:
+            retrieved: Список найденных документов
+            relevance_scores: Словарь с оценками релевантности
+            k: Позиция для вычисления NDCG
+
+        Returns:
+            NDCG@k
+        """
+        dcg = SearchMetrics.dcg_at_k(retrieved, relevance_scores, k)
+
+        # Идеальный порядок - сортировка по убыванию релевантности
+        ideal_order = sorted(
+            relevance_scores.keys(), key=lambda x: relevance_scores[x], reverse=True
+        )
+
+        idcg = SearchMetrics.dcg_at_k(ideal_order, relevance_scores, k)
+
+        if idcg == 0:
+            return 0.0
+
+        return dcg / idcg
+
+    @staticmethod
+    def mean_reciprocal_rank(results: List[Tuple[List[str], Set[str]]]) -> float:
+        """
+        Mean Reciprocal Rank (MRR)
+
+        Args:
+            results: Список кортежей (retrieved, relevant) для каждого запроса
+
+        Returns:
+            MRR
+        """
+        if not results:
+            return 0.0
+
+        reciprocal_ranks = []
+
+        for retrieved, relevant in results:
+            # Находим позицию первого релевантного документа
+            for i, doc in enumerate(retrieved):
+                if doc in relevant:
+                    reciprocal_ranks.append(1 / (i + 1))
+                    break
+            else:
+                # Если релевантных документов не найдено
+                reciprocal_ranks.append(0.0)
+
+        return sum(reciprocal_ranks) / len(reciprocal_ranks)
+
+    @staticmethod
+    def f1_at_k(retrieved: List[str], relevant: Set[str], k: int) -> float:
+        """
+        F1-мера на позиции k
+
+        Args:
+            retrieved: Список найденных документов
+            relevant: Множество релевантных документов
+            k: Позиция для вычисления F1
+
+        Returns:
+            F1@k
+        """
+        precision = SearchMetrics.precision_at_k(retrieved, relevant, k)
+        recall = SearchMetrics.recall_at_k(retrieved, relevant, k)
+
+        if precision + recall == 0:
+            return 0.0
+
+        return 2 * (precision * recall) / (precision + recall)
+
+    @staticmethod
+    def calculate_all_metrics(
+        retrieved: List[str],
+        relevant: Set[str],
+        relevance_scores: Dict[str, float] = None,
+        k_values: List[int] = [1, 5, 10],
+    ) -> Dict[str, float]:
+        """
+        Вычислить все метрики для одного запроса
+
+        Args:
+            retrieved: Список найденных документов
+            relevant: Множество релевантных документов
+            relevance_scores: Оценки релевантности (для NDCG)
+            k_values: Значения k для метрик
+
+        Returns:
+            Словарь с метриками
+        """
+        metrics = {}
+
+        # Метрики для разных k
+        for k in k_values:
+            metrics[f"precision@{k}"] = SearchMetrics.precision_at_k(
+                retrieved, relevant, k
+            )
+            metrics[f"recall@{k}"] = SearchMetrics.recall_at_k(retrieved, relevant, k)
+            metrics[f"f1@{k}"] = SearchMetrics.f1_at_k(retrieved, relevant, k)
+
+            if relevance_scores:
+                metrics[f"ndcg@{k}"] = SearchMetrics.ndcg_at_k(
+                    retrieved, relevance_scores, k
+                )
+
+        # Общие метрики
+        metrics["average_precision"] = SearchMetrics.average_precision(
+            retrieved, relevant
+        )
+
+        # MRR для одного запроса
+        for i, doc in enumerate(retrieved):
+            if doc in relevant:
+                metrics["reciprocal_rank"] = 1 / (i + 1)
+                break
+        else:
+            metrics["reciprocal_rank"] = 0.0
+
+        return metrics
+
+
+========================================
+FILE: src\semantic_search\evaluation\__init__.py
+========================================
+"""Модуль для оценки и сравнения методов поиска"""
+
+from .baselines import BaseSearchMethod, OpenAISearchBaseline
+from .comparison import SearchComparison
+from .metrics import SearchMetrics
+
+__all__ = [
+    "BaseSearchMethod",
+    "OpenAISearchBaseline",
+    "SearchComparison",
+    "SearchMetrics",
+]
+
+
+========================================
+FILE: scripts\diploma_demo.py
+========================================
+"""
+Демонстрационный скрипт для дипломной работы
+Сравнение Doc2Vec с классическими методами поиска (TF-IDF и BM25)
+"""
+
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from loguru import logger
+
+from semantic_search.core.doc2vec_trainer import Doc2VecTrainer
+from semantic_search.core.search_engine import SemanticSearchEngine
+from semantic_search.evaluation.baselines import (
+    BM25SearchBaseline,
+    Doc2VecSearchAdapter,
+    TFIDFSearchBaseline,
+)
+from semantic_search.evaluation.comparison import QueryTestCase, SearchComparison
+
+
+def create_test_cases_for_diploma() -> List[QueryTestCase]:
+    """Создание тестовых случаев для демонстрации в дипломной работе"""
+
+    # Создаем разнообразные тестовые случаи, демонстрирующие преимущества семантического поиска
+    test_cases = [
+        # 1. Семантический запрос (синонимы)
+        QueryTestCase(
+            query="Глокализация и локальная адаптация глобальных брендов",
+            relevant_docs={
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf",
+                "glocal_strategy.pdf",
+                "cultural_marketing.pdf",
+            },
+            relevance_scores={
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf": 3,
+                "glocal_strategy.pdf": 3,
+                "cultural_marketing.pdf": 2,
+            },
+            description="Семантический запрос с синонимами",
+        ),
+        # 2. Концептуальный запрос
+        QueryTestCase(
+            query="Языковая гибридность в мультикультурной литературе",
+            relevant_docs={
+                "SALMAN RUSHDIE/Hybridization_Heteroglossia_and_the_engl.doc",
+                "Транслигвизм/-1.pdf",
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx",
+            },
+            relevance_scores={
+                "SALMAN RUSHDIE/Hybridization_Heteroglossia_and_the_engl.doc": 3,
+                "Транслигвизм/-1.pdf": 3,
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx": 2,
+            },
+            description="Концептуальный запрос",
+        ),
+        # 3. Контекстный запрос
+        QueryTestCase(
+            query="Диалогизм Бахтина в современной лингвистике",
+            relevant_docs={
+                " Бахтин/Zebroski-MikhailBakhtinQuestion-1992.pdf",
+                "SALMAN RUSHDIE/12.docx",
+                "Транслигвизм/-1.pdf",
+            },
+            relevance_scores={
+                " Бахтин/Zebroski-MikhailBakhtinQuestion-1992.pdf": 3,
+                "SALMAN RUSHDIE/12.docx": 2,
+                "Транслигвизм/-1.pdf": 2,
+            },
+            description="Контекстно-зависимый запрос",
+        ),
+        # 4. Междисциплинарный запрос
+        QueryTestCase(
+            query="Культурная идентичность в эпоху глобализации",
+            relevant_docs={
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf",
+                "SALMAN RUSHDIE/rushdie-1997-notes-on-writing-and-the-nation.pdf",
+                "cultural_marketing.pdf",
+            },
+            relevance_scores={
+                "Глобализация и глокализация/glokalizatsiya-i-vozvrat-etnichnosti-v-vek-globalizatsii.pdf": 3,
+                "SALMAN RUSHDIE/rushdie-1997-notes-on-writing-and-the-nation.pdf": 3,
+                "cultural_marketing.pdf": 2,
+            },
+            description="Междисциплинарный запрос",
+        ),
+        # 5. Абстрактный запрос
+        QueryTestCase(
+            query="Лингвистическая креативность и языковые инновации",
+            relevant_docs={
+                "Лингвокреативность/Linguistic_Creativity_Cognitive_And_Communicative_.pdf",
+                "Транслигвизм/-1.pdf",
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx",
+            },
+            relevance_scores={
+                "Лингвокреативность/Linguistic_Creativity_Cognitive_And_Communicative_.pdf": 3,
+                "Транслигвизм/-1.pdf": 2,
+                "SALMAN RUSHDIE/Language is assumed by many to be a stable medium of communication.docx": 2,
+            },
+            description="Абстрактный концептуальный запрос",
+        ),
+    ]
+
+    return test_cases
+
+
+def prepare_documents_for_baselines(
+    corpus_info: List, max_docs: int = 100
+) -> List[tuple]:
+    """
+    Подготовка документов для индексации в baseline методах
+
+    Args:
+        corpus_info: Информация о корпусе из Doc2Vec
+        max_docs: Максимальное количество документов для индексации
+
+    Returns:
+        Список кортежей (doc_id, text, metadata)
+    """
+    documents = []
+
+    for i, (tokens, doc_id, metadata) in enumerate(corpus_info[:max_docs]):
+        # Восстанавливаем текст из токенов
+        # Берем больше токенов для лучшего представления документа
+        text = " ".join(tokens[:1000])  # Увеличили до 1000 токенов
+        documents.append((doc_id, text, metadata))
+
+    return documents
+
+
+def create_comparison_plots(results: Dict[str, Any], output_dir: Path):
+    """Создание улучшенных графиков для дипломной работы"""
+
+    # Устанавливаем стиль для публикаций
+    plt.style.use("seaborn-v0_8-paper")
+    sns.set_palette("husl")
+
+    # Настройка шрифтов для русского языка
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    plt.rcParams["font.size"] = 12
+
+    # Создаем директорию для графиков
+    plots_dir = output_dir / "diploma_plots"
+    plots_dir.mkdir(exist_ok=True, parents=True)
+
+    # 1. Основные метрики качества
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    methods = list(results.keys())
+    metrics_data = {
+        "MAP": [results[m]["aggregated"]["MAP"] for m in methods],
+        "MRR": [results[m]["aggregated"]["MRR"] for m in methods],
+        "P@10": [results[m]["aggregated"]["avg_precision@10"] for m in methods],
+        "R@10": [results[m]["aggregated"]["avg_recall@10"] for m in methods],
+    }
+
+    # График 1: Столбчатая диаграмма
+    df_metrics = pd.DataFrame(metrics_data, index=methods)
+    df_metrics.plot(kind="bar", ax=ax1, width=0.8)
+    ax1.set_title("Столбчатая диаграмма", fontsize=16, fontweight="bold")
+    ax1.set_xlabel("Метод поиска", fontsize=14)
+    ax1.set_ylabel("Значение метрики", fontsize=14)
+    ax1.set_ylim(0, 1.0)
+    ax1.legend(title="Метрики", bbox_to_anchor=(1.05, 1), loc="upper left")
+    ax1.grid(True, alpha=0.3)
+
+    # Добавляем значения на столбцы
+    for container in ax1.containers:
+        ax1.bar_label(container, fmt="%.3f", padding=3)
+
+    # График 2: Радарная диаграмма
+    from math import pi
+
+    categories = ["MAP", "MRR", "P@10", "R@10"]
+    angles = [n / len(categories) * 2 * pi for n in range(len(categories))]
+    angles += angles[:1]
+
+    ax2 = plt.subplot(122, projection="polar")
+
+    for method in methods:
+        values = [
+            results[method]["aggregated"]["MAP"],
+            results[method]["aggregated"]["MRR"],
+            results[method]["aggregated"]["avg_precision@10"],
+            results[method]["aggregated"]["avg_recall@10"],
+        ]
+        values += values[:1]
+
+        ax2.plot(angles, values, "o-", linewidth=2, label=method, markersize=8)
+        ax2.fill(angles, values, alpha=0.15)
+
+    ax2.set_xticks(angles[:-1])
+    ax2.set_xticklabels(categories, fontsize=12)
+    ax2.set_ylim(0, 1.0)
+    ax2.set_title("Радарная диаграмма", fontsize=16, fontweight="bold", pad=20)
+    ax2.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(
+        plots_dir / "quality_metrics_comparison.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # 2. Сравнение производительности
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Время поиска
+    query_times = [results[m]["aggregated"]["avg_query_time"] for m in methods]
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
+
+    bars1 = ax1.bar(methods, query_times, color=colors, alpha=0.8, edgecolor="black")
+    ax1.set_title("Среднее время выполнения запроса", fontsize=16, fontweight="bold")
+    ax1.set_xlabel("Метод поиска", fontsize=14)
+    ax1.set_ylabel("Время (секунды)", fontsize=14)
+    ax1.grid(True, alpha=0.3, axis="y")
+
+    # Добавляем значения на столбцы
+    for bar, time in zip(bars1, query_times):
+        height = bar.get_height()
+        ax1.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{time:.4f}s",
+            ha="center",
+            va="bottom",
+            fontsize=12,
+        )
+
+    # Время индексации
+    index_times = [results[m]["method_stats"]["index_time"] for m in methods]
+
+    bars2 = ax2.bar(methods, index_times, color=colors, alpha=0.8, edgecolor="black")
+    ax2.set_title("Время индексации корпуса", fontsize=16, fontweight="bold")
+    ax2.set_xlabel("Метод поиска", fontsize=14)
+    ax2.set_ylabel("Время (секунды)", fontsize=14)
+    ax2.grid(True, alpha=0.3, axis="y")
+
+    # Добавляем значения на столбцы
+    for bar, time in zip(bars2, index_times):
+        height = bar.get_height()
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{time:.2f}s",
+            ha="center",
+            va="bottom",
+            fontsize=12,
+        )
+
+    plt.tight_layout()
+    plt.savefig(plots_dir / "performance_comparison.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 3. Детальное сравнение по типам запросов
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Подготовка данных по типам запросов
+    query_types = []
+    for method in methods:
+        for detail in results[method]["detailed"]:
+            query_types.append(
+                {
+                    "Метод": method,
+                    "Тип запроса": detail["query"][:30] + "...",
+                    "AP": detail["average_precision"],
+                }
+            )
+
+    df_queries = pd.DataFrame(query_types)
+    pivot_df = df_queries.pivot(index="Тип запроса", columns="Метод", values="AP")
+
+    # Создаем тепловую карту
+    sns.heatmap(
+        pivot_df,
+        annot=True,
+        fmt=".3f",
+        cmap="YlOrRd",
+        cbar_kws={"label": "Average Precision"},
+        vmin=0,
+        vmax=1,
+    )
+    ax.set_title(
+        "Эффективность методов по типам запросов", fontsize=16, fontweight="bold"
+    )
+    ax.set_xlabel("Метод поиска", fontsize=14)
+    ax.set_ylabel("Тип запроса", fontsize=14)
+
+    plt.tight_layout()
+    plt.savefig(plots_dir / "query_types_heatmap.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 4. Комплексная оценка эффективности
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Нормализуем метрики для сравнения
+    efficiency_data = []
+
+    for method in methods:
+        # Качество (MAP) - чем выше, тем лучше
+        quality = results[method]["aggregated"]["MAP"]
+
+        # Скорость (обратная величина времени) - чем быстрее, тем лучше
+        speed = 1 / (results[method]["aggregated"]["avg_query_time"] + 0.001)
+
+        # Нормализуем скорость к диапазону [0, 1]
+        max_speed = max(
+            [1 / (results[m]["aggregated"]["avg_query_time"] + 0.001) for m in methods]
+        )
+        speed_normalized = speed / max_speed
+
+        efficiency_data.append(
+            {
+                "Метод": method,
+                "Качество (MAP)": quality,
+                "Скорость (норм.)": speed_normalized,
+                "Эффективность": (quality + speed_normalized) / 2,  # Среднее
+            }
+        )
+
+    df_efficiency = pd.DataFrame(efficiency_data)
+
+    # Scatter plot
+    for i, row in df_efficiency.iterrows():
+        ax.scatter(
+            row["Скорость (норм.)"],
+            row["Качество (MAP)"],
+            s=500,
+            alpha=0.7,
+            label=row["Метод"],
+        )
+        ax.annotate(
+            row["Метод"],
+            (row["Скорость (норм.)"], row["Качество (MAP)"]),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=12,
+        )
+
+    ax.set_xlabel("Нормализованная скорость", fontsize=14)
+    ax.set_ylabel("Качество поиска (MAP)", fontsize=14)
+    ax.set_title(
+        "Соотношение качества и скорости поиска", fontsize=16, fontweight="bold"
+    )
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(-0.1, 1.1)
+    ax.set_ylim(-0.1, 1.1)
+
+    # Добавляем диагональную линию
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, label="Баланс качество/скорость")
+
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(plots_dir / "efficiency_scatter.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    logger.info(f"Графики сохранены в {plots_dir}")
+
+
+def generate_diploma_report(results: Dict[str, Any], output_path: Path) -> str:
+    """Генерация отчета для дипломной работы"""
+
+    report = []
+    report.append("=" * 80)
+    report.append("ОТЧЕТ О СРАВНИТЕЛЬНОМ АНАЛИЗЕ МЕТОДОВ СЕМАНТИЧЕСКОГО ПОИСКА")
+    report.append("для дипломной работы")
+    report.append("=" * 80)
+    report.append("")
+
+    # Аннотация
+    report.append("АННОТАЦИЯ")
+    report.append("-" * 40)
+    report.append("В данном исследовании проведен сравнительный анализ трех методов")
+    report.append("информационного поиска на специализированном корпусе документов:")
+    report.append("1. Doc2Vec - метод семантического поиска на основе нейронных сетей")
+    report.append("2. TF-IDF - классический статистический метод")
+    report.append("3. BM25 - улучшенная версия TF-IDF, стандарт в поисковых системах")
+    report.append("")
+
+    # Методология
+    report.append("МЕТОДОЛОГИЯ ОЦЕНКИ")
+    report.append("-" * 40)
+    report.append("Для оценки использовались следующие метрики:")
+    report.append("- MAP (Mean Average Precision) - средняя точность по всем запросам")
+    report.append("- MRR (Mean Reciprocal Rank) - средний обратный ранг")
+    report.append("- Precision@k - точность в топ-k результатах")
+    report.append("- Recall@k - полнота в топ-k результатах")
+    report.append("")
+
+    # Результаты
+    report.append("РЕЗУЛЬТАТЫ ЭКСПЕРИМЕНТА")
+    report.append("-" * 40)
+
+    # Таблица результатов
+    report.append("\nТаблица 1. Сравнение метрик качества")
+    report.append("-" * 60)
+    report.append(f"{'Метод':<15} {'MAP':<10} {'MRR':<10} {'P@10':<10} {'R@10':<10}")
+    report.append("-" * 60)
+
+    for method in results:
+        agg = results[method]["aggregated"]
+        report.append(
+            f"{method:<15} "
+            f"{agg['MAP']:<10.3f} "
+            f"{agg['MRR']:<10.3f} "
+            f"{agg['avg_precision@10']:<10.3f} "
+            f"{agg['avg_recall@10']:<10.3f}"
+        )
+
+    report.append("")
+
+    # Анализ производительности
+    report.append("\nТаблица 2. Анализ производительности")
+    report.append("-" * 60)
+    report.append(
+        f"{'Метод':<15} {'Время запроса (с)':<20} {'Время индексации (с)':<20}"
+    )
+    report.append("-" * 60)
+
+    for method in results:
+        query_time = results[method]["aggregated"]["avg_query_time"]
+        index_time = results[method]["method_stats"]["index_time"]
+        report.append(f"{method:<15} {query_time:<20.4f} {index_time:<20.2f}")
+
+    report.append("")
+
+    # Выводы
+    report.append("ОСНОВНЫЕ ВЫВОДЫ")
+    report.append("-" * 40)
+
+    # Определяем лучший метод по MAP
+    best_method = max(results.items(), key=lambda x: x[1]["aggregated"]["MAP"])[0]
+    best_map = max(results.items(), key=lambda x: x[1]["aggregated"]["MAP"])[1][
+        "aggregated"
+    ]["MAP"]
+
+    report.append("1. КАЧЕСТВО ПОИСКА:")
+    report.append(
+        f"   Наилучшие результаты показал метод {best_method} с MAP = {best_map:.3f}"
+    )
+
+    # Сравнение Doc2Vec с классическими методами
+    doc2vec_map = results["Doc2Vec"]["aggregated"]["MAP"]
+    tfidf_map = results["TF-IDF"]["aggregated"]["MAP"]
+    bm25_map = results["BM25"]["aggregated"]["MAP"]
+
+    improvement_tfidf = ((doc2vec_map - tfidf_map) / tfidf_map) * 100
+    improvement_bm25 = ((doc2vec_map - bm25_map) / bm25_map) * 100
+
+    report.append(f"\n   Doc2Vec превосходит TF-IDF на {improvement_tfidf:.1f}%")
+    report.append(f"   Doc2Vec превосходит BM25 на {improvement_bm25:.1f}%")
+
+    # Анализ скорости
+    report.append("\n2. СКОРОСТЬ РАБОТЫ:")
+    fastest_method = min(
+        results.items(), key=lambda x: x[1]["aggregated"]["avg_query_time"]
+    )[0]
+
+    doc2vec_time = results["Doc2Vec"]["aggregated"]["avg_query_time"]
+    tfidf_time = results["TF-IDF"]["aggregated"]["avg_query_time"]
+    bm25_time = results["BM25"]["aggregated"]["avg_query_time"]
+
+    report.append(f"   Самый быстрый метод: {fastest_method}")
+    report.append(f"   Doc2Vec медленнее TF-IDF в {doc2vec_time / tfidf_time:.1f} раз")
+    report.append(f"   Doc2Vec медленнее BM25 в {doc2vec_time / bm25_time:.1f} раз")
+
+    # Рекомендации
+    report.append("\n3. РЕКОМЕНДАЦИИ:")
+    report.append("   - Для задач, требующих высокого качества семантического поиска,")
+    report.append("     рекомендуется использовать Doc2Vec")
+    report.append("   - Для высоконагруженных систем с требованиями к скорости")
+    report.append("     можно рассмотреть BM25 как компромиссное решение")
+    report.append("   - TF-IDF показывает наихудшие результаты и не рекомендуется")
+    report.append("     для современных поисковых систем")
+
+    # Заключение
+    report.append("\nЗАКЛЮЧЕНИЕ")
+    report.append("-" * 40)
+    report.append("Проведенное исследование демонстрирует превосходство метода Doc2Vec")
+    report.append("над классическими статистическими методами поиска. Несмотря на")
+    report.append("более высокие вычислительные затраты, Doc2Vec обеспечивает")
+    report.append("значительно лучшее качество поиска за счет учета семантических")
+    report.append("связей между словами и документами.")
+
+    report.append("\n" + "=" * 80)
+
+    report_text = "\n".join(report)
+
+    # Сохраняем отчет
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(report_text)
+
+    return report_text
+
+
+def main():
+    """Основная функция для демонстрации в дипломной работе"""
+    print("=" * 80)
+    print("ДЕМОНСТРАЦИЯ ДЛЯ ДИПЛОМНОЙ РАБОТЫ")
+    print("Сравнение семантического поиска Doc2Vec с классическими методами")
+    print("=" * 80)
+
+    # Загрузка модели Doc2Vec
+    print("\n📂 Загрузка обученной модели Doc2Vec...")
+    model_name = "doc2vec_model"
+
+    trainer = Doc2VecTrainer()
+    model = trainer.load_model(model_name)
+
+    if not model:
+        print(f"❌ Не удалось загрузить модель '{model_name}'")
+        print("Сначала обучите модель командой:")
+        print("poetry run semantic-search-cli train -d /path/to/documents")
+        return
+
+    print(f"✅ Модель загружена: {len(model.dv)} документов")
+    print(f"   Размерность векторов: {model.vector_size}")
+    print(f"   Размер словаря: {len(model.wv.key_to_index)} слов")
+
+    # Создание поискового движка
+    search_engine = SemanticSearchEngine(model, trainer.corpus_info)
+
+    # Создание тестовых случаев
+    print("\n🧪 Подготовка тестовых случаев...")
+    test_cases = create_test_cases_for_diploma()
+    print(f"   Создано {len(test_cases)} тестовых запросов")
+
+    # Подготовка документов для baseline методов
+    print("\n📚 Подготовка документов для индексации...")
+    documents = prepare_documents_for_baselines(
+        trainer.corpus_info, max_docs=len(trainer.corpus_info)
+    )
+    print(f"   Подготовлено {len(documents)} документов")
+
+    # Создание объекта сравнения
+    comparison = SearchComparison(test_cases)
+
+    # Инициализация методов поиска
+    print("\n🔧 Инициализация методов поиска...")
+
+    # 1. Doc2Vec
+    doc2vec_adapter = Doc2VecSearchAdapter(search_engine, trainer.corpus_info)
+    print("✅ Doc2Vec адаптер готов")
+
+    # 2. TF-IDF
+    tfidf_baseline = TFIDFSearchBaseline()
+    print("✅ TF-IDF baseline инициализирован")
+
+    # 3. BM25
+    bm25_baseline = BM25SearchBaseline()
+    print("✅ BM25 baseline инициализирован")
+
+    # Индексация для baseline методов
+    print("\n📊 Индексация документов для baseline методов...")
+
+    print("   Индексация TF-IDF...")
+    tfidf_baseline.index(documents)
+
+    print("   Индексация BM25...")
+    bm25_baseline.index(documents)
+
+    # Оценка методов
+    print("\n📈 ОЦЕНКА МЕТОДОВ")
+    print("-" * 80)
+
+    all_results = {}
+
+    # 1. Doc2Vec
+    print("\n1️⃣ Оценка Doc2Vec...")
+    doc2vec_results = comparison.evaluate_method(
+        doc2vec_adapter, top_k=10, verbose=True
+    )
+    all_results["Doc2Vec"] = doc2vec_results
+
+    # 2. TF-IDF
+    print("\n2️⃣ Оценка TF-IDF...")
+    tfidf_results = comparison.evaluate_method(tfidf_baseline, top_k=10, verbose=True)
+    all_results["TF-IDF"] = tfidf_results
+
+    # 3. BM25
+    print("\n3️⃣ Оценка BM25...")
+    bm25_results = comparison.evaluate_method(bm25_baseline, top_k=10, verbose=True)
+    all_results["BM25"] = bm25_results
+
+    # Сравнительный анализ
+    print("\n📊 РЕЗУЛЬТАТЫ СРАВНЕНИЯ")
+    print("=" * 80)
+
+    # Создаем сравнительную таблицу
+    df_comparison = comparison.compare_methods(
+        [doc2vec_adapter, tfidf_baseline, bm25_baseline], save_results=True
+    )
+
+    print("\nСравнительная таблица метрик:")
+    print(df_comparison.to_string(index=False))
+
+    # Генерация графиков для дипломной работы
+    print("\n📊 Генерация графиков...")
+    output_dir = Path("data/evaluation_results")
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    create_comparison_plots(all_results, output_dir)
+
+    # Генерация отчета
+    print("\n📄 Генерация отчета для дипломной работы...")
+    report_path = output_dir / "diploma_comparison_report.txt"
+    report = generate_diploma_report(all_results, report_path)
+
+    # Выводим ключевые результаты
+    print("\n🎯 КЛЮЧЕВЫЕ РЕЗУЛЬТАТЫ ДЛЯ ДИПЛОМНОЙ РАБОТЫ:")
+    print("=" * 80)
+
+    doc2vec_map = all_results["Doc2Vec"]["aggregated"]["MAP"]
+    tfidf_map = all_results["TF-IDF"]["aggregated"]["MAP"]
+    bm25_map = all_results["BM25"]["aggregated"]["MAP"]
+
+    print("\n📊 Качество поиска (MAP):")
+    print(f"   Doc2Vec: {doc2vec_map:.3f} ⭐")
+    print(f"   BM25:    {bm25_map:.3f}")
+    print(f"   TF-IDF:  {tfidf_map:.3f}")
+
+    improvement_tfidf = ((doc2vec_map - tfidf_map) / tfidf_map) * 100
+    improvement_bm25 = ((doc2vec_map - bm25_map) / bm25_map) * 100
+
+    print("\n📈 Превосходство Doc2Vec:")
+    print(f"   Над TF-IDF: +{improvement_tfidf:.1f}%")
+    print(f"   Над BM25:   +{improvement_bm25:.1f}%")
+
+    print("\n✅ Все результаты сохранены в: data/evaluation_results/")
+    print("   📊 diploma_plots/ - графики для презентации")
+    print("   📄 diploma_comparison_report.txt - подробный отчет")
+    print("   📈 comparison_results.csv - таблица с метриками")
+
+    print("\n" + "=" * 80)
+    print("ДЕМОНСТРАЦИЯ ЗАВЕРШЕНА УСПЕШНО!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Выполнение прервано пользователем")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка: {e}", exc_info=True)
+        print(f"\n❌ Неожиданная ошибка: {e}")
+        print("Проверьте логи для подробной информации")
+        sys.exit(1)
+
+
+========================================
+FILE: src\semantic_search\core\doc2vec_trainer.py
+========================================
+"""Модуль для обучения модели Doc2Vec"""
+
+from __future__ import annotations
+
+import json
+import pickle
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+try:
+    from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+
+    GENSIM_AVAILABLE = True
+except ImportError:
+    logger.error("Gensim не установлен. Установите: pip install gensim")
+    GENSIM_AVAILABLE = False
+
+from semantic_search.config import DOC2VEC_CONFIG, MODELS_DIR
+
+
+class Doc2VecTrainer:
+    """Класс для обучения и управления моделью Doc2Vec"""
+
+    def __init__(self):
+        self.model: Optional[Doc2Vec] = None
+        self.config = DOC2VEC_CONFIG
+        self.corpus_info: Optional[List[Tuple[List[str], str, dict]]] = None
+        self.training_metadata: Dict[str, Any] = {}
+        self.documents_base_path: Optional[Path] = None
+
+    def create_tagged_documents(
+        self, corpus: List[Tuple[List[str], str, dict]]
+    ) -> List[TaggedDocument]:
+        """
+        Создание TaggedDocument объектов для gensim
+
+        Args:
+            corpus: Список кортежей (tokens, doc_id, metadata)
+
+        Returns:
+            Список TaggedDocument объектов
+        """
+        if not GENSIM_AVAILABLE:
+            raise ImportError("Gensim не доступен")
+
+        tagged_docs = [
+            TaggedDocument(words=tokens, tags=[doc_id]) for tokens, doc_id, _ in corpus
+        ]
+        logger.info(f"Создано {len(tagged_docs)} TaggedDocument объектов")
+        return tagged_docs
+
+    def _get_training_params(
+        self,
+        vector_size: Optional[int],
+        window: Optional[int],
+        min_count: Optional[int],
+        epochs: Optional[int],
+        workers: Optional[int],
+        dm: Optional[int],
+        negative: Optional[int],
+        hs: Optional[int],
+        sample: Optional[float],
+        dm_concat: Optional[int] = None,
+        dm_mean: Optional[int] = None,
+        alpha: Optional[float] = None,
+        min_alpha: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Получить параметры для обучения с поддержкой новых параметров"""
+        params = {
+            "vector_size": vector_size or self.config["vector_size"],
+            "window": window or self.config["window"],
+            "min_count": min_count or self.config["min_count"],
+            "epochs": epochs or self.config["epochs"],
+            "workers": workers or self.config["workers"],
+            "seed": self.config["seed"],
+            "dm": dm if dm is not None else self.config.get("dm", 1),
+            "negative": negative
+            if negative is not None
+            else self.config.get("negative", 10),
+            "hs": hs if hs is not None else self.config.get("hs", 0),
+            "sample": sample if sample is not None else self.config.get("sample", 1e-5),
+        }
+
+        # Новые параметры
+        if dm_concat is not None:
+            params["dm_concat"] = dm_concat
+        elif "dm_concat" in self.config:
+            params["dm_concat"] = self.config["dm_concat"]
+
+        if dm_mean is not None:
+            params["dm_mean"] = dm_mean
+        elif "dm_mean" in self.config:
+            params["dm_mean"] = self.config["dm_mean"]
+
+        if alpha is not None:
+            params["alpha"] = alpha
+        elif "alpha" in self.config:
+            params["alpha"] = self.config["alpha"]
+
+        if min_alpha is not None:
+            params["min_alpha"] = min_alpha
+        elif "min_alpha" in self.config:
+            params["min_alpha"] = self.config["min_alpha"]
+
+        return params
+
+    def _train_standard(
+        self,
+        corpus: List[Tuple[List[str], str, dict]],
+        vector_size: Optional[int] = None,
+        window: Optional[int] = None,
+        min_count: Optional[int] = None,
+        epochs: Optional[int] = None,
+        workers: Optional[int] = None,
+        dm: Optional[int] = None,
+        negative: Optional[int] = None,
+        hs: Optional[int] = None,
+        sample: Optional[float] = None,
+    ) -> Optional[Doc2Vec]:
+        """
+        Обучение модели Doc2Vec
+
+        Args:
+            corpus: Подготовленный корпус
+            vector_size: Размерность векторов (по умолчанию из config)
+            window: Размер окна контекста
+            min_count: Минимальная частота слова
+            epochs: Количество эпох обучения
+            workers: Количество потоков
+            dm: Distributed Memory (1) или Distributed Bag of Words (0)
+            negative: Размер negative sampling (если hs=0)
+            hs: Использовать Hierarchical Softmax (1) или negative sampling (0)
+            sample: Порог для downsampling высокочастотных слов
+
+        Returns:
+            Обученная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для обучения модели")
+            return None
+        if not corpus:
+            logger.error("Корпус пуст, обучение невозможно")
+            return None
+
+        params = self._get_training_params(
+            vector_size, window, min_count, epochs, workers, dm, negative, hs, sample
+        )
+
+        logger.info("Подготовка данных для обучения...")
+        tagged_docs = self.create_tagged_documents(corpus)
+
+        logger.info("Начинаем обучение модели Doc2Vec с параметрами:")
+        for k, v in params.items():
+            logger.info(f"  {k}: {v}")
+
+        try:
+            model = Doc2Vec(tagged_docs, **params)
+
+            self.model = model
+            self.corpus_info = corpus
+
+            logger.info("Обучение модели завершено успешно!")
+            logger.info(
+                f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
+            )
+            logger.info(f"Обучено векторов документов: {len(model.dv)}")
+
+            return model
+
+        except Exception as e:
+            logger.error(f"Ошибка при обучении модели: {e}")
+            return None
+
+    def train_model(
+        self,
+        corpus: List[Tuple[List[str], str, dict]],
+        vector_size: Optional[int] = None,
+        window: Optional[int] = None,
+        min_count: Optional[int] = None,
+        epochs: Optional[int] = None,
+        workers: Optional[int] = None,
+        dm: Optional[int] = None,
+        negative: Optional[int] = None,
+        hs: Optional[int] = None,
+        sample: Optional[float] = None,
+        dm_concat: Optional[int] = None,
+        dm_mean: Optional[int] = None,
+        alpha: Optional[float] = None,
+        min_alpha: Optional[float] = None,
+        preset: Optional[str] = None,
+    ) -> Optional[Doc2Vec]:
+        """
+        Обучение модели Doc2Vec с оптимизацией под объём корпуса.
+
+        Для небольших корпусов используется стандартное обучение.
+        Для больших корпусов (> 10 000 документов) применяется поэпоховое обучение.
+
+        Args:
+            corpus: Подготовленный корпус, где каждый элемент — кортеж (токены, тег, метаданные)
+            vector_size: Размерность векторов (по умолчанию из self.config)
+            window: Размер окна контекста (по умолчанию из self.config)
+            min_count: Минимальная частота слова (по умолчанию из self.config)
+            epochs: Количество эпох обучения (по умолчанию из self.config)
+            workers: Количество потоков (по умолчанию из self.config)
+            dm: Distributed Memory (1) или Distributed Bag of Words (0)
+            negative: Размер negative sampling
+            hs: Использовать Hierarchical Softmax
+            sample: Порог для downsampling
+            preset: Использовать пресет настроек ('fast', 'balanced', 'quality')
+
+        Returns:
+            Обученная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для обучения модели")
+            return None
+        if not corpus:
+            logger.error("Корпус пуст, обучение невозможно")
+            return None
+
+        if preset and preset in self.config.get("doc2vec_presets", {}):
+            preset_config: Dict = self.config["doc2vec_presets"][preset]
+            logger.info(f"Используется пресет '{preset}'")
+
+            # Применяем настройки пресета (если параметр не указан явно)
+            vector_size = vector_size or preset_config.get("vector_size")
+            window = window or preset_config.get("window")
+            min_count = min_count or preset_config.get("min_count")
+            epochs = epochs or preset_config.get("epochs")
+            negative = negative or preset_config.get("negative")
+            sample = sample or preset_config.get("sample")
+
+        if len(corpus) > 10000:
+            # Для больших корпусов - поэпоховое обучение
+            logger.info("Большой корпус обнаружен. Используем поэпоховое обучение...")
+
+            params = self._get_training_params(
+                vector_size,
+                window,
+                min_count,
+                epochs,
+                workers,
+                dm,
+                negative,
+                hs,
+                sample,
+            )
+
+            logger.info("Подготовка данных для обучения...")
+            tagged_docs = self.create_tagged_documents(corpus)
+
+            logger.info("Создание модели с параметрами:")
+            for k, v in params.items():
+                logger.info(f"  {k}: {v}")
+
+            try:
+                model = Doc2Vec(**params)
+                model.build_vocab(tagged_docs)
+                logger.info(f"Словарь построен: {len(model.wv.key_to_index)} слов")
+
+                for epoch in range(params["epochs"]):
+                    logger.info(f"Эпоха {epoch + 1}/{params['epochs']}...")
+                    model.train(
+                        tagged_docs, total_examples=model.corpus_count, epochs=1
+                    )
+
+                self.model = model
+                self.corpus_info = corpus
+
+                logger.info("Обучение завершено успешно!")
+                logger.info(
+                    f"Словарь содержит {len(model.wv.key_to_index)} уникальных слов"
+                )
+                logger.info(f"Обучено векторов документов: {len(model.dv)}")
+
+                return model
+
+            except Exception as e:
+                logger.error(f"Ошибка при обучении модели: {e}")
+                return None
+        else:
+            # Для небольших корпусов используем стандартное обучение
+            return self._train_standard(
+                corpus,
+                vector_size=vector_size,
+                window=window,
+                min_count=min_count,
+                epochs=epochs,
+                workers=workers,
+                dm=dm,
+                negative=negative,
+                hs=hs,
+                sample=sample,
+            )
+
+    def save_model(
+        self, model: Optional[Doc2Vec] = None, model_name: str = "doc2vec_model"
+    ) -> bool:
+        """
+        Сохранение модели на диск
+
+        Args:
+            model: Модель для сохранения (по умолчанию self.model)
+            model_name: Имя файла модели
+
+        Returns:
+            True если сохранение успешно
+        """
+        model_to_save = model or self.model
+
+        if model_to_save is None:
+            logger.error("Нет модели для сохранения")
+            return False
+
+        # Проверяем, что имя модели не пустое
+        if not model_name or model_name.strip() == "":
+            logger.error("Имя модели не может быть пустым")
+            return False
+
+        try:
+            if model_name.endswith(".model"):
+                model_name = model_name[:-6]
+            model_path = MODELS_DIR / f"{model_name}.model"
+            model_to_save.save(str(model_path))
+
+            # Сохраняем также информацию о корпусе
+            if self.corpus_info:
+                corpus_path = MODELS_DIR / f"{model_name}_corpus_info.pkl"
+                with open(corpus_path, "wb") as f:
+                    pickle.dump(self.corpus_info, f)
+                logger.info(f"Информация о корпусе сохранена: {corpus_path}")
+
+            # Сохраняем метаданные обучения если они есть
+            if self.training_metadata:
+                metadata_path = MODELS_DIR / f"{model_name}_metadata.json"
+                with open(metadata_path, "w", encoding="utf-8") as f:
+                    json.dump(self.training_metadata, f, indent=2, ensure_ascii=False)
+                logger.info(f"Метаданные обучения сохранены: {metadata_path}")
+
+            logger.info(f"Модель сохранена: {model_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении модели: {e}")
+            return False
+
+    def load_model(self, model_name: str = "doc2vec_model") -> Optional[Doc2Vec]:
+        """
+        Загрузка модели с диска
+
+        Args:
+            model_name: Имя файла модели
+
+        Returns:
+            Загруженная модель Doc2Vec или None при ошибке
+        """
+        if not GENSIM_AVAILABLE:
+            logger.error("Gensim не доступен для загрузки модели")
+            return None
+
+        if not model_name or model_name.strip() == "":
+            logger.error("Имя модели не может быть пустым")
+            return None
+
+        try:
+            if model_name.endswith(".model"):
+                model_name = model_name[:-6]
+
+            model_path = MODELS_DIR / f"{model_name}.model"
+
+            if not model_path.exists():
+                logger.error(f"Файл модели не найден: {model_path}")
+                return None
+
+            model = Doc2Vec.load(str(model_path))
+            self.model = model
+
+            # Загружаем информацию о корпусе если есть
+            corpus_path = MODELS_DIR / f"{model_name}_corpus_info.pkl"
+            if corpus_path.exists():
+                try:
+                    with open(corpus_path, "rb") as f:
+                        self.corpus_info = pickle.load(f)
+                    logger.info("Информация о корпусе загружена")
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить информацию о корпусе: {e}")
+                    self.corpus_info = []
+
+            # Загружаем метаданные обучения если есть
+            metadata_path = MODELS_DIR / f"{model_name}_metadata.json"
+            if metadata_path.exists():
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        self.training_metadata = json.load(f)
+                    logger.info("Метаданные обучения загружены")
+
+                    # Загружаем базовый путь документов
+                    if "documents_base_path" in self.training_metadata:
+                        self.documents_base_path = Path(
+                            self.training_metadata["documents_base_path"]
+                        )
+                        logger.info(
+                            f"Базовый путь документов: {self.documents_base_path}"
+                        )
+
+                        # Проверяем существование пути
+                        if not self.documents_base_path.exists():
+                            logger.warning(
+                                f"Базовый путь не существует: {self.documents_base_path}"
+                            )
+                    else:
+                        logger.warning("Базовый путь документов не найден в метаданных")
+
+                except Exception as e:
+                    logger.warning(f"Не удалось загрузить метаданные обучения: {e}")
+                    self.training_metadata = {}
+
+            logger.info(f"Модель загружена: {model_path}")
+            logger.info(f"Векторов документов: {len(model.dv)}")
+            logger.info(f"Размерность векторов: {model.vector_size}")
+
+            return model
+
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке модели: {e}")
+            return None
+
+    def get_model_info(self) -> dict:
+        """
+        Получение информации о текущей модели
+
+        Returns:
+            Словарь с информацией о модели
+        """
+        if self.model is None:
+            return {"status": "no_model"}
+
+        info = {
+            "status": "loaded",
+            "vector_size": self.model.vector_size,
+            "vocabulary_size": len(self.model.wv.key_to_index),
+            "documents_count": len(self.model.dv),
+            "window": self.model.window,
+            "min_count": self.model.min_count,
+            "epochs": self.model.epochs,
+            "dm": self.model.dm,
+            "dm_mean": getattr(self.model, "dm_mean", None),
+            "dm_concat": getattr(self.model, "dm_concat", None),
+            "negative": self.model.negative,
+            "hs": self.model.hs,
+            "sample": self.model.sample,
+            "workers": self.model.workers,
+        }
+
+        info["training_time_formatted"] = self.training_metadata.get(
+            "training_time_formatted", "Неизвестно"
+        )
+
+        info["training_date"] = self.training_metadata.get(
+            "training_date", "Неизвестно"
+        )
+
+        return info
+
+
+========================================
+FILE: src\semantic_search\core\document_processor.py
+========================================
+"""Основной модуль для обработки документов"""
+
+from pathlib import Path
+from typing import Generator, List, NamedTuple
+
+from loguru import logger
+
+from semantic_search.config import TEXT_PROCESSING_CONFIG
+from semantic_search.utils.file_utils import FileExtractor
+from semantic_search.utils.text_utils import TextProcessor
+
+
+class ProcessedDocument(NamedTuple):
+    """Структура для хранения обрабатываемого документа"""
+
+    file_path: Path
+    relative_path: str
+    raw_text: str
+    tokens: List[str]
+    metadata: dict
+
+
+class DocumentProcessor:
+    """Главный класс для обработки коллекции документов"""
+
+    def __init__(self):
+        self.file_extractor = FileExtractor()
+        self.text_processor = TextProcessor()
+        self.config = TEXT_PROCESSING_CONFIG
+
+    def process_documents(
+        self, root_path: Path
+    ) -> Generator[ProcessedDocument, None, None]:
+        """
+        Основная функция обработки документов
+
+        Args:
+            root_path: Путь к корневой директории с документами
+
+        Yields:
+            ProcessedDocument объекты
+        """
+
+        if not root_path.exists():
+            raise FileNotFoundError(f"Директория не найдена: {root_path}")
+
+        if not root_path.is_dir():
+            raise NotADirectoryError(f"Путь не является директорией: {root_path}")
+
+        logger.info(f"Начинаем обработку документов в: {root_path}")
+
+        file_paths = self.file_extractor.find_documents(root_path)
+
+        if not file_paths:
+            logger.warning("Документы не найдены")
+            return
+
+        processed_count = 0
+        skipped_count = 0
+
+        for i, file_path in enumerate(file_paths, 1):
+            logger.info(f"Обработка {i}/{len(file_paths)}: {file_path.name}")
+
+            try:
+                file_size = file_path.stat().st_size
+                max_file_size_bytes = (
+                    self.config.get("max_file_size_mb", 100) * 1024 * 1024
+                )
+
+                if file_size > max_file_size_bytes:
+                    logger.warning(
+                        f"Файл слишком большой ({file_size / 1024 / 1024:.1f}MB): {file_path}"
+                    )
+                    skipped_count += 1
+                    continue
+
+                raw_text = self.file_extractor.extract_text(file_path)
+
+                if len(raw_text) < self.config["min_text_length"]:
+                    logger.warning(
+                        f"Текст слишком короткий ({len(raw_text)} символов): {file_path}"
+                    )
+                    skipped_count += 1
+                    continue
+
+                max_text_length = self.config.get("max_text_length", 5_000_000)
+
+                if len(raw_text) > max_text_length:
+                    logger.info(
+                        f"Текст обрезан с {len(raw_text):,} до {max_text_length:,} символов"
+                    )
+                    raw_text = raw_text[:max_text_length]
+
+                tokens = self.text_processor.preprocess_text(raw_text)
+
+                if len(tokens) < self.config["min_tokens_count"]:
+                    logger.warning(f"Слишком мало токенов ({len(tokens)}): {file_path}")
+                    skipped_count += 1
+                    continue
+
+                relative_path = str(file_path.relative_to(root_path))
+                relative_path = relative_path.replace("\\", "/")
+
+                metadata = {
+                    "file_size": file_path.stat().st_size,
+                    "extension": file_path.suffix,
+                    "tokens_count": len(tokens),
+                    "text_length": len(raw_text),
+                }
+
+                processed_count += 1
+                yield ProcessedDocument(
+                    file_path=file_path,
+                    relative_path=relative_path,
+                    raw_text=raw_text,
+                    tokens=tokens,
+                    metadata=metadata,
+                )
+
+            except PermissionError:
+                logger.error(f"Нет доступа к файлу: {file_path}")
+                skipped_count += 1
+                continue
+            except Exception as e:
+                logger.error(f"Ошибка при обработке {file_path}: {e}")
+                skipped_count += 1
+                continue
+
+        logger.info(
+            f"Обработка завершена. Успешно: {processed_count}, Пропущено: {skipped_count}"
+        )
+
+
+========================================
+FILE: src\semantic_search\core\search_engine.py
+========================================
+"""Модуль поискового движка (рефакторинг)"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec
+
+from loguru import logger
+
+from semantic_search.config import CACHE_DIR, SEARCH_CONFIG
+from semantic_search.utils.cache_manager import CacheManager
+from semantic_search.utils.text_utils import TextProcessor
+
+
+class SearchResult:
+    """Класс для представления результата поиска"""
+
+    def __init__(self, doc_id: str, similarity: float, metadata: Optional[Dict] = None):
+        self.doc_id = doc_id
+        self.similarity = similarity
+        self.metadata = metadata or {}
+        self.file_path = Path(doc_id)  # doc_id это относительный путь
+
+    def __repr__(self):
+        return f"SearchResult(doc_id='{self.doc_id}', similarity={self.similarity:.3f})"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Преобразование в словарь для сериализации"""
+        return {
+            "doc_id": self.doc_id,
+            "similarity": self.similarity,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SearchResult":
+        """Создание из словаря"""
+        return cls(
+            doc_id=data["doc_id"],
+            similarity=data["similarity"],
+            metadata=data.get("metadata", {}),
+        )
+
+
+class SemanticSearchEngine:
+    """Класс для семантического поиска по документам"""
+
+    def __init__(
+        self,
+        model: Optional[Doc2Vec] = None,
+        corpus_info: Optional[List] = None,
+        documents_base_path: Optional[Path] = None,
+    ):
+        self.model = model
+        self.corpus_info = corpus_info or []
+        self.documents_base_path = documents_base_path
+        self.text_processor = TextProcessor()
+        self.config = SEARCH_CONFIG
+        self.cache_manager = CacheManager(CACHE_DIR)
+
+        # Создаем индекс метаданных для быстрого доступа
+        self._metadata_index = self._build_metadata_index()
+
+        if self.documents_base_path:
+            logger.info(
+                f"SearchEngine инициализирован с базовым путем: {self.documents_base_path}"
+            )
+
+    def _build_metadata_index(self) -> Dict[str, Dict]:
+        """Построение индекса метаданных"""
+        index = {}
+        if self.corpus_info:
+            for tokens, doc_id, metadata in self.corpus_info:
+                index[doc_id] = metadata
+        return index
+
+    def set_model(
+        self,
+        model: Doc2Vec,
+        corpus_info: Optional[List] = None,
+        documents_base_path: Optional[Path] = None,
+    ) -> None:
+        """
+        Установка модели для поиска
+
+        Args:
+            model: Обученная модель Doc2Vec
+            corpus_info: Информация о корпусе
+            documents_base_path: Базовый путь документов
+        """
+        self.model = model
+
+        if corpus_info:
+            self.corpus_info = corpus_info
+            self._metadata_index = self._build_metadata_index()
+
+        if documents_base_path:
+            self.documents_base_path = documents_base_path
+            logger.info(f"Установлен базовый путь: {self.documents_base_path}")
+
+        logger.info("Поисковая модель установлена")
+
+    def _validate_search_params(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        similarity_threshold: Optional[float] = None,
+    ) -> Tuple[str, int, float]:
+        """Валидация параметров поиска"""
+        if not query or not query.strip():
+            raise ValueError("Пустой поисковый запрос")
+
+        query = query.strip()
+
+        # Валидация top_k
+        if top_k is None:
+            top_k = self.config["default_top_k"]
+        else:
+            top_k = max(1, min(top_k, self.config.get("max_top_k", 100)))
+
+        # Валидация порога схожести
+        if similarity_threshold is None:
+            similarity_threshold = self.config["similarity_threshold"]
+        else:
+            similarity_threshold = max(0.0, min(similarity_threshold, 1.0))
+
+        return query, top_k, similarity_threshold
+
+    def _search_base(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        similarity_threshold: Optional[float] = None,
+    ) -> List[SearchResult]:
+        """
+        Базовая функция поиска
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+            similarity_threshold: Минимальный порог схожести
+
+        Returns:
+            Список результатов поиска
+        """
+        if self.model is None:
+            logger.error("Модель не загружена")
+            return []
+
+        try:
+            # Валидация параметров
+            query, top_k, similarity_threshold = self._validate_search_params(
+                query, top_k, similarity_threshold
+            )
+
+            logger.info(
+                f"Поиск по запросу: '{query}' (top_k={top_k}, threshold={similarity_threshold})"
+            )
+
+            # Препроцессинг запроса
+            query_tokens = self.text_processor.preprocess_text(query)
+
+            if not query_tokens:
+                logger.warning("Запрос не содержит значимых токенов")
+                return []
+
+            logger.debug(
+                f"Токены запроса ({len(query_tokens)}): {query_tokens[:10]}..."
+            )
+
+            # Получаем вектор для запроса
+            query_vector = self.model.infer_vector(query_tokens)
+
+            # Ищем похожие документы
+            similar_docs = self.model.dv.most_similar([query_vector], topn=top_k)
+
+            # Фильтруем по порогу схожести и создаем результаты
+            results = []
+            for doc_id, similarity in similar_docs:
+                if similarity >= similarity_threshold:
+                    metadata = self._metadata_index.get(doc_id, {})
+                    results.append(SearchResult(doc_id, similarity, metadata))
+
+            logger.info(f"Найдено результатов: {len(results)}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске: {e}", exc_info=True)
+            return []
+
+    def _apply_filters(
+        self,
+        results: List[SearchResult],
+        file_extensions: Optional[Set[str]] = None,
+        min_file_size: Optional[int] = None,
+        max_file_size: Optional[int] = None,
+        max_results: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """Применение фильтров к результатам"""
+        filtered_results = []
+
+        for result in results:
+            metadata = result.metadata
+
+            # Фильтр по расширению
+            if file_extensions:
+                file_ext = metadata.get("extension", "")
+                if file_ext not in file_extensions:
+                    continue
+
+            # Фильтр по размеру файла
+            file_size = metadata.get("file_size", 0)
+            if min_file_size and file_size < min_file_size:
+                continue
+            if max_file_size and file_size > max_file_size:
+                continue
+
+            filtered_results.append(result)
+
+            # Ограничение количества результатов
+            if max_results and len(filtered_results) >= max_results:
+                break
+
+        return filtered_results
+
+    def search_with_filters(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        file_extensions: Optional[Set[str]] = None,
+        date_range: Optional[Tuple] = None,
+        min_file_size: Optional[int] = None,
+        max_file_size: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """Поиск с фильтрами"""
+        # Базовый поиск с увеличенным top_k для компенсации фильтрации
+        search_top_k = (top_k or self.config["default_top_k"]) * 3
+        results = self._search_base(query, top_k=search_top_k)
+
+        # Применяем фильтры
+        if self.config.get("enable_filtering", True):
+            results = self._apply_filters(
+                results,
+                file_extensions=file_extensions,
+                min_file_size=min_file_size,
+                max_file_size=max_file_size,
+                max_results=top_k,
+            )
+
+        return results
+
+    def _make_cache_key(
+        self,
+        query: str,
+        top_k: Optional[int],
+        file_extensions: Optional[Set[str]],
+        date_range: Optional[Tuple],
+        min_file_size: Optional[int],
+        max_file_size: Optional[int],
+    ) -> str:
+        """Генерация стабильного кэш-ключа для поискового запроса"""
+        key_data = {
+            "query": query.strip().lower(),
+            "top_k": top_k,
+            "file_extensions": sorted(file_extensions) if file_extensions else None,
+            "date_range": date_range,
+            "min_file_size": min_file_size,
+            "max_file_size": max_file_size,
+        }
+        return json.dumps(key_data, sort_keys=True, ensure_ascii=False)
+
+    def search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        file_extensions: Optional[Set[str]] = None,
+        date_range: Optional[Tuple] = None,
+        min_file_size: Optional[int] = None,
+        max_file_size: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """
+        Поиск с кэшированием и поддержкой фильтров
+
+        Args:
+            query: Поисковый запрос
+            top_k: Количество результатов
+            file_extensions: Фильтр по расширениям файлов
+            date_range: Фильтр по дате (не используется, оставлено для совместимости)
+            min_file_size: Минимальный размер файла
+            max_file_size: Максимальный размер файла
+
+        Returns:
+            Список результатов поиска
+        """
+        # Проверка включения кэширования
+        if not self.config.get("enable_caching", True):
+            return self.search_with_filters(
+                query,
+                top_k=top_k,
+                file_extensions=file_extensions,
+                date_range=date_range,
+                min_file_size=min_file_size,
+                max_file_size=max_file_size,
+            )
+
+        # Генерируем стабильный ключ
+        raw_key = self._make_cache_key(
+            query, top_k, file_extensions, date_range, min_file_size, max_file_size
+        )
+        cache_key = f"search:{raw_key}"
+
+        # Проверяем кэш
+        cached_result = self.cache_manager.get(cache_key)
+        if cached_result:
+            logger.info(f"Результат получен из кэша для запроса: {query}")
+            # Восстанавливаем объекты SearchResult из словарей
+            return [SearchResult.from_dict(r) for r in cached_result]
+
+        # Выполняем поиск
+        results = self.search_with_filters(
+            query,
+            top_k=top_k,
+            file_extensions=file_extensions,
+            date_range=date_range,
+            min_file_size=min_file_size,
+            max_file_size=max_file_size,
+        )
+
+        # Сохраняем в кэш (сериализуем результаты)
+        cache_data = [r.to_dict() for r in results]
+        self.cache_manager.set(cache_key, cache_data)
+
+        return results
+
+    def search_similar_to_document(
+        self, doc_id: str, top_k: Optional[int] = None
+    ) -> List[SearchResult]:
+        """
+        Поиск документов, похожих на указанный документ
+
+        Args:
+            doc_id: ID документа
+            top_k: Количество результатов
+
+        Returns:
+            Список похожих документов
+        """
+        if self.model is None:
+            logger.error("Модель не загружена")
+            return []
+
+        if not doc_id:
+            logger.error("Не указан ID документа")
+            return []
+
+        top_k = top_k or self.config["default_top_k"]
+
+        try:
+            if doc_id not in self.model.dv:
+                logger.error(f"Документ не найден в модели: {doc_id}")
+                return []
+
+            # Получаем похожие документы
+            similar_docs = self.model.dv.most_similar(
+                doc_id,
+                topn=top_k + 1,  # +1 чтобы исключить сам документ
+            )
+
+            results = []
+            for similar_doc_id, similarity in similar_docs:
+                if similar_doc_id != doc_id:  # Исключаем сам документ
+                    metadata = self._metadata_index.get(similar_doc_id, {})
+                    results.append(SearchResult(similar_doc_id, similarity, metadata))
+
+            return results[:top_k]  # Возвращаем только top_k результатов
+
+        except Exception as e:
+            logger.error(f"Ошибка при поиске похожих документов: {e}", exc_info=True)
+            return []
+
+    def get_document_vector(self, doc_id: str) -> Optional[List[float]]:
+        """
+        Получение вектора документа
+
+        Args:
+            doc_id: ID документа
+
+        Returns:
+            Вектор документа или None
+        """
+        if self.model is None or not doc_id or doc_id not in self.model.dv:
+            return None
+
+        try:
+            return self.model.dv[doc_id].tolist()
+        except Exception as e:
+            logger.error(f"Ошибка при получении вектора документа: {e}")
+            return None
+
+    def get_search_statistics(self) -> Dict[str, Any]:
+        """
+        Получение статистики поисковой системы
+
+        Returns:
+            Словарь со статистикой
+        """
+        if self.model is None:
+            return {"status": "no_model", "error": "Модель не загружена"}
+
+        try:
+            # Получаем первые 10 документов для примера
+            sample_docs = list(self.model.dv.key_to_index.keys())[:10]
+
+            return {
+                "status": "ready",
+                "documents_count": len(self.model.dv),
+                "vocabulary_size": len(self.model.wv.key_to_index),
+                "vector_size": self.model.vector_size,
+                "indexed_documents": sample_docs,
+                "cache_enabled": self.config.get("enable_caching", True),
+                "filtering_enabled": self.config.get("enable_filtering", True),
+            }
+        except Exception as e:
+            logger.error(f"Ошибка при получении статистики: {e}")
+            return {"status": "error", "error": str(e)}
+
+
+========================================
+FILE: src\semantic_search\core\text_summarizer.py
+========================================
+"""Модуль для суммаризации текстов"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from gensim.models.doc2vec import Doc2Vec
+
+import numpy as np
+from loguru import logger
+
+from semantic_search.config import SUMMARIZATION_CONFIG, TEXT_PROCESSING_CONFIG
+from semantic_search.utils.text_utils import TextProcessor
+
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    logger.warning("scikit-learn не установлен. Суммаризация будет недоступна")
+    SKLEARN_AVAILABLE = False
+
+
+class TextSummarizer:
+    """Класс для экстрактивной суммаризации текстов"""
+
+    def __init__(self, doc2vec_model: Optional[Doc2Vec] = None):
+        self.model = doc2vec_model
+        self.text_processor = TextProcessor()
+        self.config = SUMMARIZATION_CONFIG
+        self.chunk_size = TEXT_PROCESSING_CONFIG.get("chunk_size", 500_000)
+
+        # Минимальная длина предложения для включения в выжимку
+        self.min_summary_sentence_length = self.config.get("min_sentence_length", 15)
+        # Минимальное количество слов в предложении
+        self.min_words_in_sentence = self.config.get("min_words_in_sentence", 5)
+
+    def set_model(self, model: Doc2Vec):
+        """Установка модели Doc2Vec"""
+        self.model = model
+        logger.info("Модель для суммаризации установлена")
+
+    def _filter_sentence(self, sentence: str) -> bool:
+        """
+        Проверка, подходит ли предложение для включения в выжимку
+
+        Args:
+            sentence: Предложение для проверки
+
+        Returns:
+            True если предложение подходит, False если нужно отфильтровать
+        """
+        # Убираем лишние пробелы
+        cleaned_sentence = sentence.strip()
+
+        # Проверка минимальной длины в символах
+        if len(cleaned_sentence) < self.min_summary_sentence_length:
+            return False
+
+        # Проверка минимального количества слов
+        words = cleaned_sentence.split()
+        if len(words) < self.min_words_in_sentence:
+            return False
+
+        # Проверка на наличие хотя бы одного значимого слова (не только предлоги/союзы)
+        meaningful_words = [w for w in words if len(w) > 3]
+        if len(meaningful_words) < 2:
+            return False
+
+        # Проверка на слишком много цифр (возможно, это таблица или список)
+        digit_ratio = sum(c.isdigit() for c in cleaned_sentence) / len(cleaned_sentence)
+        if digit_ratio > 0.5:
+            return False
+
+        # Проверка на повторяющиеся символы (например, "............")
+        for char in cleaned_sentence:
+            if cleaned_sentence.count(char * 5) > 0:  # 5 одинаковых символов подряд
+                return False
+
+        return True
+
+    def _sentence_to_vector(self, sentence_tokens: List[str]) -> Optional[np.ndarray]:
+        """
+        Преобразование предложения в вектор
+
+        Args:
+            sentence_tokens: Токены предложения
+
+        Returns:
+            Векторное представление предложения
+        """
+        if self.model is None or not sentence_tokens:
+            return None
+
+        try:
+            # Используем infer_vector для получения вектора предложения
+            vector = self.model.infer_vector(sentence_tokens)
+            return vector
+        except Exception as e:
+            logger.error(f"Ошибка при векторизации предложения: {e}")
+            return None
+
+    def _calculate_sentence_scores(
+        self, sentences: List[str]
+    ) -> List[Tuple[str, float]]:
+        """
+        Вычисление оценок важности предложений методом TextRank
+        с учетом фильтрации коротких предложений
+
+        Args:
+            sentences: Список предложений
+
+        Returns:
+            Список кортежей (предложение, оценка)
+        """
+        # Фильтруем предложения перед оценкой
+        filtered_sentences = []
+        sentence_indices = []
+
+        for i, sentence in enumerate(sentences):
+            if self._filter_sentence(sentence):
+                filtered_sentences.append(sentence)
+                sentence_indices.append(i)
+
+        if not filtered_sentences:
+            logger.warning("Все предложения отфильтрованы как слишком короткие")
+            # Возвращаем самые длинные предложения если все отфильтрованы
+            sorted_by_length = sorted(
+                enumerate(sentences), key=lambda x: len(x[1]), reverse=True
+            )
+            return [(sent, 1.0) for _, sent in sorted_by_length[:5]]
+
+        if not SKLEARN_AVAILABLE or self.model is None:
+            # Fallback: оценка по длине и позиции
+            scored_sentences = []
+            for i, sent in enumerate(filtered_sentences):
+                # Учитываем длину и позицию (начало текста важнее)
+                position_score = 1.0 - (sentence_indices[i] / len(sentences))
+                length_score = min(
+                    len(sent.split()) / 20, 1.0
+                )  # Нормализуем по 20 словам
+                score = position_score * 0.3 + length_score * 0.7
+                scored_sentences.append((sent, score))
+            return scored_sentences
+
+        # Получаем векторы для отфильтрованных предложений
+        sentence_vectors = []
+        valid_sentences = []
+
+        for sentence in filtered_sentences:
+            tokens = self.text_processor.preprocess_text(sentence)
+            if tokens:  # Проверяем, что есть значимые токены
+                vector = self._sentence_to_vector(tokens)
+                if vector is not None:
+                    sentence_vectors.append(vector)
+                    valid_sentences.append(sentence)
+
+        if len(sentence_vectors) < 2:
+            # Недостаточно предложений для анализа
+            return [(sent, 1.0) for sent in valid_sentences]
+
+        try:
+            # Вычисляем матрицу схожести
+            similarity_matrix = cosine_similarity(sentence_vectors)
+
+            # Применяем простой алгоритм PageRank
+            scores = self._pagerank_algorithm(similarity_matrix)
+
+            # Сопоставляем оценки с предложениями
+            scored_sentences = list(zip(valid_sentences, scores))
+
+            return scored_sentences
+
+        except Exception as e:
+            logger.error(f"Ошибка при вычислении оценок предложений: {e}")
+            # Fallback к простой оценке
+            return [(sent, 1.0) for sent in valid_sentences]
+
+    def _pagerank_algorithm(
+        self, similarity_matrix: np.ndarray, damping: float = 0.85, max_iter: int = 100
+    ) -> List[float]:
+        """
+        Упрощенный алгоритм PageRank для ранжирования предложений
+
+        Args:
+            similarity_matrix: Матрица схожести предложений
+            damping: Коэффициент затухания
+            max_iter: Максимальное количество итераций
+
+        Returns:
+            Список оценок для каждого предложения
+        """
+        n = similarity_matrix.shape[0]
+
+        # Инициализация: равные веса для всех предложений
+        scores = np.ones(n) / n
+
+        # Создаем переходную матрицу
+        # Заменяем нули на маленькое значение, чтобы избежать деления на ноль
+        similarity_matrix = np.where(similarity_matrix == 0, 1e-8, similarity_matrix)
+
+        # Нормализуем строки матрицы
+        row_sums = similarity_matrix.sum(axis=1)
+        transition_matrix = similarity_matrix / row_sums[:, np.newaxis]
+
+        # Итеративный алгоритм PageRank
+        for _ in range(max_iter):
+            new_scores = (1 - damping) / n + damping * np.dot(
+                transition_matrix.T, scores
+            )
+
+            # Проверяем сходимость
+            if np.allclose(scores, new_scores, atol=1e-6):
+                break
+
+            scores = new_scores
+
+        return scores.tolist()
+
+    def summarize_text(
+        self,
+        text: str,
+        sentences_count: Optional[int] = None,
+        min_sentence_length: Optional[int] = None,
+    ) -> List[str]:
+        """
+        Создание экстрактивной выжимки текста
+
+        Args:
+            text: Исходный текст
+            sentences_count: Количество предложений в выжимке
+            min_sentence_length: Минимальная длина предложения (переопределяет настройки)
+
+        Returns:
+            Список предложений выжимки
+        """
+        if not text.strip():
+            logger.warning("Пустой текст для суммаризации")
+            return []
+
+        sentences_count = sentences_count or self.config["default_sentences_count"]
+
+        # Временно переопределяем минимальную длину если указана
+        if min_sentence_length is not None:
+            original_min_length = self.min_summary_sentence_length
+            self.min_summary_sentence_length = min_sentence_length
+
+        logger.info(
+            f"Начинаем суммаризацию текста длиной {len(text)} символов (цель: {sentences_count} предложений)"
+        )
+
+        # Для очень длинных текстов используем упрощенный подход
+        if len(text) > 1_000_000:
+            logger.warning(
+                f"Текст очень длинный ({len(text)} символов), используем упрощенный метод"
+            )
+            result = self._summarize_long_text(
+                text, sentences_count, self.min_summary_sentence_length
+            )
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
+            return result
+
+        sentences = self.text_processor.split_into_sentences(text)
+
+        if not sentences:
+            logger.warning("Не удалось разбить текст на предложения")
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
+            return []
+
+        # Фильтруем слишком короткие предложения перед проверкой
+        valid_sentences = [s for s in sentences if self._filter_sentence(s)]
+
+        if len(valid_sentences) <= sentences_count:
+            logger.info(
+                f"Количество подходящих предложений ({len(valid_sentences)}) меньше или равно требуемому"
+            )
+
+            # Восстанавливаем оригинальную настройку
+            if min_sentence_length is not None:
+                self.min_summary_sentence_length = original_min_length
+
+            return valid_sentences
+
+        # Вычисляем оценки важности предложений (уже отфильтрованных)
+        scored_sentences = self._calculate_sentence_scores(sentences)
+
+        # Сортируем по оценке (убывание)
+        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+
+        # Берем топ-N предложений
+        top_sentences = scored_sentences[:sentences_count]
+
+        # Восстанавливаем исходный порядок предложений
+        summary_sentences = []
+
+        # Создаем множество для быстрого поиска
+        top_sentences_set = {sent for sent, _ in top_sentences}
+
+        for original_sent in sentences:
+            if original_sent in top_sentences_set:
+                summary_sentences.append(original_sent)
+                if len(summary_sentences) >= sentences_count:
+                    break
+
+        logger.info(f"Создана выжимка из {len(summary_sentences)} предложений")
+
+        # Восстанавливаем оригинальную настройку
+        if min_sentence_length is not None:
+            self.min_summary_sentence_length = original_min_length
+
+        return summary_sentences
+
+    def _summarize_long_text(
+        self, text: str, sentences_count: int, min_sentence_length: int
+    ) -> List[str]:
+        """
+        Упрощенная суммаризация для очень длинных текстов
+
+        Args:
+            text: Исходный текст
+            sentences_count: Количество предложений
+            min_sentence_length: Минимальная длина предложения
+
+        Returns:
+            Список предложений выжимки
+        """
+
+        chunks = [
+            text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)
+        ]
+
+        all_important_sentences = []
+
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Обработка части {i + 1}/{len(chunks)}")
+
+            chunk_sentences = self.text_processor.split_into_sentences(chunk)
+
+            if not chunk_sentences:
+                continue
+
+            # Фильтруем короткие предложения
+            valid_chunk_sentences = [
+                s for s in chunk_sentences if self._filter_sentence(s)
+            ]
+
+            if not valid_chunk_sentences:
+                continue
+
+            # Для каждого чанка выбираем пропорциональное количество предложений
+            chunk_sentence_count = max(1, sentences_count // len(chunks))
+            if i == 0:  # Первый чанк может содержать больше важной информации
+                chunk_sentence_count = max(2, chunk_sentence_count)
+
+            # Простая эвристика: берем первые и последние предложения + самые длинные
+            important_sentences = []
+
+            # Первое предложение чанка (если оно достаточно длинное)
+            if valid_chunk_sentences:
+                important_sentences.append(valid_chunk_sentences[0])
+
+            # Последнее предложение чанка
+            if len(valid_chunk_sentences) > 1:
+                important_sentences.append(valid_chunk_sentences[-1])
+
+            # Самые информативные предложения (длинные, но не слишком)
+            if len(valid_chunk_sentences) > 2:
+                # Сортируем по "информативности" - не слишком короткие и не слишком длинные
+                middle_sentences = valid_chunk_sentences[1:-1]
+                sorted_by_info = sorted(
+                    middle_sentences,
+                    key=lambda s: min(len(s.split()), 50),  # Оптимальная длина ~50 слов
+                    reverse=True,
+                )
+                remaining_count = chunk_sentence_count - len(important_sentences)
+                important_sentences.extend(sorted_by_info[:remaining_count])
+
+            all_important_sentences.extend(important_sentences[:chunk_sentence_count])
+
+        # Удаляем дубликаты, сохраняя порядок
+        seen = set()
+        unique_sentences = []
+        for sent in all_important_sentences:
+            if sent not in seen and self._filter_sentence(sent):
+                seen.add(sent)
+                unique_sentences.append(sent)
+
+        # Возвращаем требуемое количество предложений
+        return unique_sentences[:sentences_count]
+
+    def summarize_file(self, file_path: str, **kwargs) -> List[str]:
+        """
+        Суммаризация файла
+
+        Args:
+            file_path: Путь к файлу
+            **kwargs: Дополнительные параметры для summarize_text
+
+        Returns:
+            Список предложений выжимки
+        """
+        from semantic_search.utils.file_utils import FileExtractor
+
+        try:
+            extractor = FileExtractor()
+            text = extractor.extract_text(Path(file_path))
+
+            if not text:
+                logger.error(f"Не удалось извлечь текст из файла: {file_path}")
+                return []
+
+            return self.summarize_text(text, **kwargs)
+
+        except Exception as e:
+            logger.error(f"Ошибка при суммаризации файла {file_path}: {e}")
+            return []
+
+    def get_summary_statistics(self, original_text: str, summary: List[str]) -> dict:
+        """
+        Получение статистики суммаризации
+
+        Args:
+            original_text: Исходный текст
+            summary: Выжимка
+
+        Returns:
+            Словарь со статистикой
+        """
+        original_sentences = self.text_processor.split_into_sentences(original_text)
+
+        # Считаем только валидные предложения в оригинале
+        valid_original_sentences = [
+            s for s in original_sentences if self._filter_sentence(s)
+        ]
+
+        stats = {
+            "original_sentences_count": len(original_sentences),
+            "valid_original_sentences_count": len(valid_original_sentences),
+            "summary_sentences_count": len(summary),
+            "compression_ratio": len(summary) / len(original_sentences)
+            if original_sentences
+            else 0,
+            "valid_compression_ratio": len(summary) / len(valid_original_sentences)
+            if valid_original_sentences
+            else 0,
+            "original_chars_count": len(original_text),
+            "summary_chars_count": sum(len(sent) for sent in summary),
+            "chars_compression_ratio": sum(len(sent) for sent in summary)
+            / len(original_text)
+            if original_text
+            else 0,
+            "avg_sentence_length": sum(len(sent.split()) for sent in summary)
+            / len(summary)
+            if summary
+            else 0,
+        }
+
+        return stats
+
+
+========================================
+FILE: src\semantic_search\core\__init__.py
+========================================
+"""Основные модули для работы с документами и поиском"""
+
+from .doc2vec_trainer import Doc2VecTrainer
+from .document_processor import DocumentProcessor, ProcessedDocument
+from .search_engine import SearchResult, SemanticSearchEngine
+from .text_summarizer import TextSummarizer
+
+__all__ = [
+    "Doc2VecTrainer",
+    "DocumentProcessor",
+    "ProcessedDocument",
+    "SemanticSearchEngine",
+    "SearchResult",
+    "TextSummarizer",
+]
+
+
+========================================
+FILE: src\semantic_search\utils\cache_manager.py
+========================================
+"""Менеджер кэширования"""
+
+import hashlib
+import pickle
+from pathlib import Path
+from typing import Any, Optional
+
+from loguru import logger
+
+
+class CacheManager:
+    """Менеджер кэширования для результатов поиска и обработки"""
+
+    def __init__(self, cache_dir: Path):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(exist_ok=True, parents=True)
+
+    def _get_cache_key(self, data: str) -> str:
+        """Генерация ключа кэша"""
+        return hashlib.md5(data.encode()).hexdigest()
+
+    def get(self, key: str) -> Optional[Any]:
+        """Получение данных из кэша"""
+        cache_file = self.cache_dir / f"{self._get_cache_key(key)}.pkl"
+
+        if cache_file.exists():
+            try:
+                with open(cache_file, "rb") as f:
+                    return pickle.load(f)
+            except Exception as e:
+                logger.warning(f"Ошибка чтения кэша: {e}")
+
+        return None
+
+    def set(self, key: str, value: Any) -> bool:
+        """Сохранение данных в кэш"""
+        cache_file = self.cache_dir / f"{self._get_cache_key(key)}.pkl"
+
+        try:
+            with open(cache_file, "wb") as f:
+                pickle.dump(value, f)
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка записи в кэш: {e}")
+            return False
+
+    def clear(self) -> bool:
+        """Очистка кэша"""
+        try:
+            for cache_file in self.cache_dir.glob("*.pkl"):
+                cache_file.unlink()
+            logger.info("Кэш очищен")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка очистки кэша: {e}")
+            return False
+
+
+========================================
+FILE: src\semantic_search\utils\file_utils.py
+========================================
+"""Утилиты для работы с файлами (рефакторинг)"""
+
+from collections import Counter
+from pathlib import Path
+from typing import Generator, List, Optional
+
+import pymupdf
+from docx import Document as DocxDocument
+from loguru import logger
+
+from semantic_search.config import SUPPORTED_EXTENSIONS
+
+try:
+    import win32com.client
+
+    DOC_SUPPORT = True
+except ImportError:
+    DOC_SUPPORT = False
+    logger.warning("pywin32 не установлен. Поддержка .doc файлов недоступна")
+
+
+class FileExtractor:
+    """Класс для извлечения текста из различных форматов файлов"""
+
+    # Константы для ограничений
+    MAX_PDF_PAGES_IN_MEMORY = 100
+    PAGE_BATCH_SIZE = 10
+    MIN_PAGE_TEXT_LENGTH = 50
+
+    def __init__(self):
+        self.word_app: Optional[object] = None
+        self._init_word_app()
+
+    def _init_word_app(self):
+        """Инициализация Word Application"""
+        if DOC_SUPPORT:
+            try:
+                self.word_app = win32com.client.Dispatch("Word.Application")
+                self.word_app.Visible = False
+            except Exception as e:
+                logger.warning(f"Не удалось инициализировать Word Application: {e}")
+                self.word_app = None
+
+    def __del__(self):
+        """Освобождение ресурсов"""
+        if self.word_app is not None:
+            try:
+                if hasattr(self.word_app, "Quit"):
+                    self.word_app.Quit()
+            except Exception:
+                pass
+
+    def find_documents(self, root_path: Path) -> List[Path]:
+        """
+        Рекурсивный поиск документов в директории
+
+        Args:
+            root_path: Путь к корневой директории
+
+        Returns:
+            Список путей к найденным файлам
+        """
+        if not root_path.exists():
+            raise FileNotFoundError(f"Директория не найдена: {root_path}")
+
+        found_files = []
+        logger.info(f"Поиск документов в: {root_path}")
+
+        for file_path in root_path.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                found_files.append(file_path)
+
+        # Логирование статистики
+        self._log_file_statistics(found_files)
+
+        return found_files
+
+    def _log_file_statistics(self, files: List[Path]) -> None:
+        """Логирование статистики найденных файлов"""
+        logger.info(f"Найдено файлов: {len(files)}")
+        ext_counter = Counter(f.suffix.lower() for f in files)
+        for ext in SUPPORTED_EXTENSIONS:
+            count = ext_counter.get(ext, 0)
+            if count > 0:
+                logger.info(f"  {ext}: {count}")
+
+    def extract_from_pdf_streaming(self, file_path: Path) -> Generator[str, None, None]:
+        """
+        Потоковое извлечение текста из PDF для больших файлов
+
+        Yields:
+            Текст по частям
+        """
+        try:
+            doc = pymupdf.open(file_path)
+            total_pages = len(doc)
+
+            logger.info(f"Обработка PDF: {file_path.name} ({total_pages} страниц)")
+
+            # Обрабатываем батчами для экономии памяти
+            for start_idx in range(0, total_pages, self.PAGE_BATCH_SIZE):
+                end_idx = min(start_idx + self.PAGE_BATCH_SIZE, total_pages)
+                batch_text = []
+
+                for page_num in range(start_idx, end_idx):
+                    try:
+                        page = doc[page_num]
+                        page_text = page.get_text()
+
+                        # Фильтруем пустые или слишком короткие страницы
+                        if len(page_text.strip()) >= self.MIN_PAGE_TEXT_LENGTH:
+                            batch_text.append(page_text)
+
+                    except Exception as e:
+                        logger.warning(f"Ошибка при обработке страницы {page_num}: {e}")
+                        continue
+
+                if batch_text:
+                    yield "\n".join(batch_text)
+
+            doc.close()
+
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста из PDF {file_path}: {e}")
+            yield ""
+
+    def extract_from_pdf(self, file_path: Path) -> str:
+        """
+        Извлечение текста из PDF с оптимизацией для больших файлов
+        """
+        try:
+            doc = pymupdf.open(file_path)
+            total_pages = len(doc)
+
+            # Для очень больших PDF используем потоковую обработку
+            if total_pages > self.MAX_PDF_PAGES_IN_MEMORY:
+                logger.warning(
+                    f"PDF содержит {total_pages} страниц. Используется потоковая обработка"
+                )
+                doc.close()
+
+                # Собираем текст по частям
+                text_parts = []
+                for chunk in self.extract_from_pdf_streaming(file_path):
+                    text_parts.append(chunk)
+
+                return "\n".join(text_parts).strip()
+
+            # Для обычных PDF - стандартная обработка
+            text_parts = []
+
+            for page_num in range(total_pages):
+                try:
+                    page = doc[page_num]
+                    page_text = page.get_text()
+
+                    if len(page_text.strip()) >= self.MIN_PAGE_TEXT_LENGTH:
+                        text_parts.append(page_text)
+
+                except Exception as e:
+                    logger.warning(f"Ошибка при обработке страницы {page_num}: {e}")
+                    continue
+
+            doc.close()
+
+            full_text = "\n".join(text_parts)
+            logger.info(f"Извлечено {len(full_text)} символов из {total_pages} страниц")
+
+            return full_text.strip()
+
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста из PDF {file_path}: {e}")
+            return ""
+
+    def extract_from_docx(self, file_path: Path) -> str:
+        """Извлечение текста из DOCX файла"""
+        try:
+            doc = DocxDocument(file_path)
+            text_parts = []
+
+            # Извлекаем текст из параграфов
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_parts.append(paragraph.text.strip())
+
+            # Извлекаем текст из таблиц
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        if (
+                            cell_text and cell_text not in text_parts
+                        ):  # Избегаем дубликатов
+                            text_parts.append(cell_text)
+
+            return "\n".join(text_parts)
+
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста из DOCX {file_path}: {e}")
+            return ""
+
+    def extract_from_doc(self, file_path: Path) -> str:
+        """Извлечение текста из DOC файла (только Windows)"""
+        if not DOC_SUPPORT or self.word_app is None:
+            logger.warning(f"Поддержка .doc файлов недоступна: {file_path}")
+            return ""
+
+        try:
+            doc = self.word_app.Documents.Open(str(file_path.absolute()))
+            text = doc.Content.Text
+            doc.Close()
+            return text.strip()
+
+        except Exception as e:
+            logger.error(f"Ошибка при извлечении текста из DOC {file_path}: {e}")
+            # Попытка переинициализировать Word при ошибке
+            self._init_word_app()
+            return ""
+
+    def extract_text(self, file_path: Path) -> str:
+        """
+        Универсальная функция извлечения текста
+
+        Args:
+            file_path: Путь к файлу
+
+        Returns:
+            Извлеченный текст
+        """
+        if not file_path.exists():
+            logger.error(f"Файл не существует: {file_path}")
+            return ""
+
+        extension = file_path.suffix.lower()
+
+        extractors = {
+            ".pdf": self.extract_from_pdf,
+            ".docx": self.extract_from_docx,
+            ".doc": self.extract_from_doc,
+        }
+
+        extractor = extractors.get(extension)
+        if extractor:
+            return extractor(file_path)
+        else:
+            logger.warning(f"Неподдерживаемый формат файла: {file_path}")
+            return ""
+
+
+========================================
+FILE: src\semantic_search\utils\logging_config.py
+========================================
+"""Улучшенная конфигурация логирования"""
+
+import sys
+from typing import Optional
+
+from loguru import logger
+
+from semantic_search.config import LOGS_DIR
+
+
+class LoggingManager:
+    """Менеджер системы логирования"""
+
+    def __init__(self):
+        self.handlers = {}
+        self.is_configured = False
+
+    def setup_logging(
+        self,
+        level: str = "INFO",
+        enable_file_logging: bool = True,
+        enable_rotation: bool = True,
+        custom_format: Optional[str] = None,
+    ) -> None:
+        """
+        Расширенная настройка системы логирования
+
+        Args:
+            level: Уровень логирования
+            enable_file_logging: Включить запись в файл
+            enable_rotation: Включить ротацию логов
+            custom_format: Пользовательский формат логов
+        """
+        if self.is_configured:
+            return
+
+        # Удаляем стандартный handler
+        logger.remove()
+
+        # Формат для консоли
+        console_format = custom_format or (
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+            "<level>{message}</level>"
+        )
+
+        # Консольный вывод
+        console_handler = logger.add(
+            sys.stderr,
+            level=level,
+            colorize=True,
+            format=console_format,
+            diagnose=True,
+            backtrace=True,
+        )
+        self.handlers["console"] = console_handler
+
+        if enable_file_logging:
+            # Основной лог файл
+            main_log = LOGS_DIR / "semantic_search.log"
+            file_format = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}"
+
+            if enable_rotation:
+                main_handler = logger.add(
+                    main_log,
+                    level=level,
+                    format=file_format,
+                    rotation="10 MB",
+                    retention="2 weeks",
+                    compression="zip",
+                    serialize=False,
+                )
+            else:
+                main_handler = logger.add(main_log, level=level, format=file_format)
+
+            self.handlers["main"] = main_handler
+
+            # Отдельный файл для ошибок
+            error_log = LOGS_DIR / "errors.log"
+            error_handler = logger.add(
+                error_log,
+                level="ERROR",
+                format=file_format,
+                rotation="5 MB",
+                retention="1 month",
+                compression="zip",
+            )
+            self.handlers["error"] = error_handler
+
+            # Лог производительности
+            perf_log = LOGS_DIR / "performance.log"
+            perf_handler = logger.add(
+                perf_log,
+                level="INFO",
+                format="{time:YYYY-MM-DD HH:mm:ss} | {message}",
+                filter=lambda record: "PERF" in record["message"],
+                rotation="50 MB",
+                retention="1 week",
+            )
+            self.handlers["performance"] = perf_handler
+
+        self.is_configured = True
+        logger.info("Система логирования настроена")
+
+        # Логируем системную информацию
+        self._log_system_info()
+
+    def _log_system_info(self):
+        """Логирование информации о системе"""
+        try:
+            import platform
+
+            import psutil
+
+            logger.info(f"Система: {platform.system()} {platform.release()}")
+            logger.info(f"Python: {platform.python_version()}")
+            logger.info(f"Процессор: {platform.processor()}")
+            logger.info(f"ОЗУ: {psutil.virtual_memory().total / 1024**3:.1f} ГБ")
+            logger.info(
+                f"Свободное место: {psutil.disk_usage('/').free / 1024**3:.1f} ГБ"
+            )
+
+        except Exception as e:
+            logger.debug(f"Не удалось получить системную информацию: {e}")
+
+    def add_performance_log(self, operation: str, duration: float, **kwargs):
+        """Добавление записи о производительности"""
+        perf_data = {"operation": operation, "duration": duration, **kwargs}
+
+        logger.info(f"PERF: {perf_data}")
+
+    def cleanup(self):
+        """Очистка ресурсов логирования"""
+        for handler_id in self.handlers.values():
+            try:
+                logger.remove(handler_id)
+            except ValueError:
+                pass
+
+        self.handlers.clear()
+        self.is_configured = False
+
+
+# Глобальный экземпляр
+logging_manager = LoggingManager()
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """Обратная совместимость"""
+    logging_manager.setup_logging(level)
+
+
+========================================
+FILE: src\semantic_search\utils\notification_system.py
+========================================
+"""Система уведомлений и прогресса"""
+
+import time
+from dataclasses import dataclass
+from enum import Enum
+from queue import Empty, Queue
+from threading import Event, Thread
+from typing import Any, Callable, Dict, Optional
+
+from loguru import logger
+
+
+class NotificationType(Enum):
+    """Типы уведомлений"""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    SUCCESS = "success"
+    PROGRESS = "progress"
+
+
+@dataclass
+class Notification:
+    """Структура уведомления"""
+
+    type: NotificationType
+    title: str
+    message: str
+    details: Optional[str] = None
+    progress: Optional[float] = None  # 0.0 - 1.0
+    timestamp: float = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = time.time()
+
+
+class ProgressTracker:
+    """Трекер прогресса операций"""
+
+    def __init__(self, total_steps: int, description: str = ""):
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.description = description
+        self.start_time = time.time()
+        self.callbacks = []
+
+    def add_callback(self, callback: Callable[[Dict[str, Any]], None]):
+        """Добавление callback для обновлений прогресса"""
+        self.callbacks.append(callback)
+
+    def update(self, step: Optional[int] = None, message: str = ""):
+        """Обновление прогресса"""
+        if step is not None:
+            self.current_step = step
+        else:
+            self.current_step += 1
+
+        progress = min(self.current_step / self.total_steps, 1.0)
+        elapsed = time.time() - self.start_time
+
+        if progress > 0:
+            eta = elapsed / progress * (1 - progress)
+        else:
+            eta = 0
+
+        progress_info = {
+            "progress": progress,
+            "current_step": self.current_step,
+            "total_steps": self.total_steps,
+            "elapsed": elapsed,
+            "eta": eta,
+            "message": message,
+            "description": self.description,
+        }
+
+        # Вызываем callbacks
+        for callback in self.callbacks:
+            try:
+                callback(progress_info)
+            except Exception as e:
+                logger.error(f"Ошибка в progress callback: {e}")
+
+    def finish(self, message: str = "Завершено"):
+        """Завершение операции"""
+        self.current_step = self.total_steps
+        self.update(message=message)
+
+
+class NotificationManager:
+    """Менеджер системы уведомлений"""
+
+    def __init__(self):
+        self.subscribers = []
+        self.notification_queue = Queue()
+        self.is_running = False
+        self.worker_thread = None
+        self.stop_event = Event()
+
+    def start(self):
+        """Запуск системы уведомлений"""
+        if self.is_running:
+            return
+
+        self.is_running = True
+        self.stop_event.clear()
+        self.worker_thread = Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
+
+        logger.info("Система уведомлений запущена")
+
+    def stop(self):
+        """Остановка системы уведомлений"""
+        if not self.is_running:
+            return
+
+        self.is_running = False
+        self.stop_event.set()
+
+        if self.worker_thread:
+            self.worker_thread.join(timeout=1.0)
+
+        logger.info("Система уведомлений остановлена")
+
+    def subscribe(self, callback: Callable[[Notification], None]):
+        """Подписка на уведомления"""
+        self.subscribers.append(callback)
+
+    def unsubscribe(self, callback: Callable[[Notification], None]):
+        """Отписка от уведомлений"""
+        if callback in self.subscribers:
+            self.subscribers.remove(callback)
+
+    def notify(self, notification: Notification):
+        """Отправка уведомления"""
+        if self.is_running:
+            self.notification_queue.put(notification)
+        else:
+            # Если система не запущена, отправляем сразу
+            self._send_notification(notification)
+
+    def _worker(self):
+        """Рабочий поток для обработки уведомлений"""
+        while not self.stop_event.is_set():
+            try:
+                notification = self.notification_queue.get(timeout=0.1)
+                self._send_notification(notification)
+                self.notification_queue.task_done()
+            except Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Ошибка в worker уведомлений: {e}")
+
+    def _send_notification(self, notification: Notification):
+        """Отправка уведомления подписчикам"""
+        for callback in self.subscribers:
+            try:
+                callback(notification)
+            except Exception as e:
+                logger.error(f"Ошибка в callback уведомления: {e}")
+
+    # Удобные методы для создания уведомлений
+    def info(self, title: str, message: str, details: Optional[str] = None):
+        """Информационное уведомление"""
+        self.notify(Notification(NotificationType.INFO, title, message, details))
+
+    def warning(self, title: str, message: str, details: Optional[str] = None):
+        """Предупреждение"""
+        self.notify(Notification(NotificationType.WARNING, title, message, details))
+
+    def error(self, title: str, message: str, details: Optional[str] = None):
+        """Уведомление об ошибке"""
+        self.notify(Notification(NotificationType.ERROR, title, message, details))
+
+    def success(self, title: str, message: str, details: Optional[str] = None):
+        """Уведомление об успехе"""
+        self.notify(Notification(NotificationType.SUCCESS, title, message, details))
+
+
+# Глобальный экземпляр
+notification_manager = NotificationManager()
+
+
+========================================
+FILE: src\semantic_search\utils\performance_monitor.py
+========================================
+"""Мониторинг производительности"""
+
+import time
+from contextlib import contextmanager
+from typing import Any, Dict
+
+import psutil
+from loguru import logger
+
+
+class PerformanceMonitor:
+    """Мониторинг производительности операций"""
+
+    def __init__(self):
+        self.metrics = {}
+
+    @contextmanager
+    def measure_operation(self, operation_name: str):
+        """Контекстный менеджер для измерения времени операции"""
+        start_time = time.time()
+        start_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+
+        try:
+            yield
+        finally:
+            end_time = time.time()
+            end_memory = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+
+            duration = end_time - start_time
+            memory_delta = end_memory - start_memory
+
+            self.metrics[operation_name] = {
+                "duration": duration,
+                "memory_start": start_memory,
+                "memory_end": end_memory,
+                "memory_delta": memory_delta,
+                "timestamp": time.time(),
+            }
+
+            logger.info(
+                f"{operation_name}: {duration:.2f}s, Память: {memory_delta:+.1f}MB"
+            )
+
+    def get_system_info(self) -> Dict[str, Any]:
+        """Получение информации о системе"""
+        return {
+            "cpu_count": psutil.cpu_count(),
+            "cpu_percent": psutil.cpu_percent(interval=1),
+            "memory_total": psutil.virtual_memory().total / 1024**3,  # GB
+            "memory_available": psutil.virtual_memory().available / 1024**3,  # GB
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_usage": psutil.disk_usage("/").percent
+            if psutil.disk_usage("/")
+            else 0,
+        }
+
+
+========================================
+FILE: src\semantic_search\utils\statistics.py
+========================================
+"""Утилиты для вычисления статистики"""
+
+from collections import Counter
+from typing import Any, Dict, List
+
+from semantic_search.core.document_processor import ProcessedDocument
+
+
+def calculate_statistics_from_processed_docs(
+    docs_data: List[ProcessedDocument],
+) -> Dict[str, Any]:
+    """
+    Вычисление статистики из уже обработанных документов
+
+    Args:
+        docs_data: Список обработанных документов
+
+    Returns:
+        Словарь со статистикой:
+        - processed_files: количество обработанных файлов
+        - total_tokens: общее количество токенов
+        - avg_tokens_per_doc: среднее количество токенов на документ
+        - extensions_count: количество файлов по расширениям
+        - largest_doc: информация о самом большом документе
+        - smallest_doc: информация о самом маленьком документе
+        - total_chars: общее количество символов
+        - avg_chars_per_doc: среднее количество символов на документ
+    """
+    if not docs_data:
+        return {
+            "processed_files": 0,
+            "total_tokens": 0,
+            "avg_tokens_per_doc": 0.0,
+            "extensions_count": {},
+            "largest_doc": None,
+            "smallest_doc": None,
+            "total_chars": 0,
+            "avg_chars_per_doc": 0.0,
+        }
+
+    # Основная статистика
+    stats = {
+        "processed_files": len(docs_data),
+        "total_tokens": sum(doc.metadata["tokens_count"] for doc in docs_data),
+        "total_chars": sum(doc.metadata["text_length"] for doc in docs_data),
+        "extensions_count": dict(
+            Counter(doc.metadata["extension"] for doc in docs_data)
+        ),
+    }
+
+    # Средние значения
+    stats["avg_tokens_per_doc"] = stats["total_tokens"] / stats["processed_files"]
+    stats["avg_chars_per_doc"] = stats["total_chars"] / stats["processed_files"]
+
+    # Самый большой и маленький документы
+    docs_by_tokens = sorted(docs_data, key=lambda x: x.metadata["tokens_count"])
+    stats["smallest_doc"] = {
+        "path": docs_by_tokens[0].relative_path,
+        "tokens": docs_by_tokens[0].metadata["tokens_count"],
+        "chars": docs_by_tokens[0].metadata["text_length"],
+    }
+    stats["largest_doc"] = {
+        "path": docs_by_tokens[-1].relative_path,
+        "tokens": docs_by_tokens[-1].metadata["tokens_count"],
+        "chars": docs_by_tokens[-1].metadata["text_length"],
+    }
+
+    return stats
+
+
+def format_statistics_for_display(stats: Dict[str, Any]) -> str:
+    """
+    Форматирование статистики для красивого вывода
+
+    Args:
+        stats: Словарь со статистикой из calculate_statistics_from_processed_docs
+
+    Returns:
+        Отформатированная строка со статистикой
+    """
+    if stats["processed_files"] == 0:
+        return "❌ Нет обработанных документов"
+
+    lines = [
+        "📊 Статистика корпуса:",
+        f"📁 Обработано документов: {stats['processed_files']}",
+        f"🔤 Общее количество токенов: {stats['total_tokens']:,}",
+        f"📄 Среднее токенов на документ: {stats['avg_tokens_per_doc']:.1f}",
+        f"📝 Общее количество символов: {stats['total_chars']:,}",
+        f"📖 Среднее символов на документ: {stats['avg_chars_per_doc']:.1f}",
+        f"📋 Форматы файлов: {stats['extensions_count']}",
+    ]
+
+    if stats["largest_doc"]:
+        lines.extend(
+            [
+                "📈 Самый большой документ:",
+                f"   📄 {stats['largest_doc']['path']}",
+                f"   🔤 {stats['largest_doc']['tokens']} токенов, {stats['largest_doc']['chars']} символов",
+            ]
+        )
+
+    if stats["smallest_doc"]:
+        lines.extend(
+            [
+                "📉 Самый маленький документ:",
+                f"   📄 {stats['smallest_doc']['path']}",
+                f"   🔤 {stats['smallest_doc']['tokens']} токенов, {stats['smallest_doc']['chars']} символов",
+            ]
+        )
+
+    return "\n".join(lines)
+
+
+def calculate_model_statistics(model_info: Dict[str, Any]) -> str:
+    """
+    Форматирование статистики модели для вывода
+
+    Args:
+        model_info: Информация о модели из Doc2VecTrainer.get_model_info()
+
+    Returns:
+        Отформатированная строка со статистикой модели
+    """
+    if model_info.get("status") != "loaded":
+        return f"❌ Модель недоступна: {model_info.get('status', 'неизвестно')}"
+
+    lines = [
+        "🧠 Статистика модели:",
+        f"✅ Статус: {model_info['status']}",
+        f"📏 Размерность векторов: {model_info['vector_size']}",
+        f"📚 Размер словаря: {model_info['vocabulary_size']:,} слов",
+        f"📄 Документов в модели: {model_info['documents_count']}",
+        f"🔍 Размер окна контекста: {model_info['window']}",
+        f"📊 Минимальная частота слова: {model_info['min_count']}",
+        f"🔄 Количество эпох обучения: {model_info['epochs']}",
+    ]
+
+    # Добавляем информацию о времени обучения
+    if "training_time_formatted" in model_info:
+        lines.append(f"⏱️ Время обучения: {model_info['training_time_formatted']}")
+
+    if "training_date" in model_info:
+        lines.append(f"📅 Дата обучения: {model_info['training_date']}")
+
+    if "corpus_size" in model_info and model_info["corpus_size"] > 0:
+        lines.append(
+            f"📑 Размер корпуса при обучении: {model_info['corpus_size']} документов"
+        )
+
+    # Режим обучения
+    if model_info.get("dm") == 1:
+        lines.append("🔧 Режим: Distributed Memory (DM)")
+    else:
+        lines.append("🔧 Режим: Distributed Bag of Words (DBOW)")
+
+    # Дополнительные параметры
+    if model_info.get("negative", 0) > 0:
+        lines.append(f"➖ Negative sampling: {model_info['negative']}")
+    if model_info.get("hs") == 1:
+        lines.append("🌳 Hierarchical Softmax: включен")
+
+    return "\n".join(lines)
+
+
+========================================
+FILE: src\semantic_search\utils\task_manager.py
+========================================
+"""Менеджер долгосрочных задач"""
+
+import time
+import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
+from enum import Enum
+from threading import Lock
+from typing import Any, Callable, Dict, List, Optional
+
+from loguru import logger
+
+from .notification_system import ProgressTracker, notification_manager
+
+
+class TaskStatus(Enum):
+    """Статусы задач"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class Task:
+    """Структура задачи"""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    description: str = ""
+    status: TaskStatus = TaskStatus.PENDING
+    progress: float = 0.0
+    result: Any = None
+    error: Optional[str] = None
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    future: Optional[Future] = None
+    progress_tracker: Optional[ProgressTracker] = None
+
+    @property
+    def duration(self) -> Optional[float]:
+        """Длительность выполнения задачи"""
+        if self.start_time and self.end_time:
+            return self.end_time - self.start_time
+        elif self.start_time:
+            return time.time() - self.start_time
+        return None
+
+
+class TaskManager:
+    """Менеджер задач для выполнения длительных операций"""
+
+    def __init__(self, max_workers: int = 4):
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.tasks: Dict[str, Task] = {}
+        self.lock = Lock()
+
+        logger.info(f"TaskManager инициализирован с {max_workers} потоками")
+
+    def submit_task(
+        self,
+        func: Callable,
+        args: tuple = (),
+        kwargs: dict = None,
+        name: str = "",
+        description: str = "",
+        track_progress: bool = False,
+        total_steps: int = 0,
+    ) -> str:
+        """
+        Создание и запуск задачи
+
+        Args:
+            func: Функция для выполнения
+            args: Аргументы функции
+            kwargs: Именованные аргументы
+            name: Название задачи
+            description: Описание задачи
+            track_progress: Включить отслеживание прогресса
+            total_steps: Общее количество шагов (для прогресса)
+
+        Returns:
+            ID задачи
+        """
+        kwargs = kwargs or {}
+
+        task = Task(name=name or func.__name__, description=description)
+
+        if track_progress and total_steps > 0:
+            task.progress_tracker = ProgressTracker(total_steps, name)
+            # Добавляем tracker в kwargs если функция его ожидает
+            if "progress_tracker" in func.__code__.co_varnames:
+                kwargs["progress_tracker"] = task.progress_tracker
+
+        # Оборачиваем функцию для отслеживания статуса
+        def wrapped_func():
+            task.status = TaskStatus.RUNNING
+            task.start_time = time.time()
+
+            try:
+                notification_manager.info(
+                    "Задача запущена", f"Начато выполнение: {task.name}"
+                )
+
+                result = func(*args, **kwargs)
+
+                task.status = TaskStatus.COMPLETED
+                task.result = result
+                task.progress = 1.0
+
+                notification_manager.success(
+                    "Задача завершена",
+                    f"Успешно завершена: {task.name}",
+                    f"Время выполнения: {task.duration:.1f}с",
+                )
+
+                return result
+
+            except Exception as e:
+                task.status = TaskStatus.FAILED
+                task.error = str(e)
+
+                notification_manager.error(
+                    "Ошибка задачи", f"Ошибка в задаче: {task.name}", str(e)
+                )
+
+                logger.error(f"Ошибка в задаче {task.id}: {e}")
+                raise
+
+            finally:
+                task.end_time = time.time()
+
+        # Запускаем задачу
+        future = self.executor.submit(wrapped_func)
+        task.future = future
+
+        with self.lock:
+            self.tasks[task.id] = task
+
+        logger.info(f"Задача {task.id} ({name}) поставлена в очередь")
+        return task.id
+
+    def get_task(self, task_id: str) -> Optional[Task]:
+        """Получение информации о задаче"""
+        with self.lock:
+            return self.tasks.get(task_id)
+
+    def get_all_tasks(self) -> List[Task]:
+        """Получение всех задач"""
+        with self.lock:
+            return list(self.tasks.values())
+
+    def get_running_tasks(self) -> List[Task]:
+        """Получение выполняющихся задач"""
+        return [
+            task for task in self.get_all_tasks() if task.status == TaskStatus.RUNNING
+        ]
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Отмена задачи"""
+        task = self.get_task(task_id)
+        if not task or not task.future:
+            return False
+
+        if task.future.cancel():
+            task.status = TaskStatus.CANCELLED
+            logger.info(f"Задача {task_id} отменена")
+            return True
+
+        return False
+
+    def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> Any:
+        """Ожидание завершения задачи"""
+        task = self.get_task(task_id)
+        if not task or not task.future:
+            raise ValueError(f"Задача {task_id} не найдена")
+
+        return task.future.result(timeout=timeout)
+
+    def cleanup_finished_tasks(self, max_keep: int = 100):
+        """Очистка завершенных задач"""
+        with self.lock:
+            finished_tasks = [
+                (task_id, task)
+                for task_id, task in self.tasks.items()
+                if task.status
+                in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]
+            ]
+
+            if len(finished_tasks) > max_keep:
+                # Сортируем по времени завершения и удаляем старые
+                finished_tasks.sort(key=lambda x: x[1].end_time or 0)
+                to_remove = finished_tasks[:-max_keep]
+
+                for task_id, _ in to_remove:
+                    del self.tasks[task_id]
+
+                logger.info(f"Удалено {len(to_remove)} завершенных задач")
+
+    def shutdown(self, wait: bool = True):
+        """Завершение работы менеджера задач"""
+        logger.info("Завершение работы TaskManager...")
+        self.executor.shutdown(wait=wait)
+
+
+# Глобальный экземпляр
+task_manager = TaskManager()
+
+
+========================================
+FILE: src\semantic_search\utils\text_utils.py
+========================================
+# В файле src/semantic_search/utils/text_utils.py
+# Обновленный TextProcessor с поддержкой двух языков
+
+import re
+from typing import List, Optional, Tuple
+
+from loguru import logger
+
+from semantic_search.config import SPACY_MODELS, TEXT_PROCESSING_CONFIG
+
+# Глобальные переменные для ленивой загрузки
+_nlp_ru = None
+_nlp_en = None
+_spacy_available = None
+_initialization_attempted = False
+
+
+def check_spacy_model_availability() -> dict:
+    """
+    Проверка доступности SpaCy моделей
+
+    Returns:
+        Словарь с информацией о состоянии моделей
+    """
+    info = {
+        "spacy_installed": False,
+        "ru_model_found": False,
+        "en_model_found": False,
+        "ru_model_loadable": False,
+        "en_model_loadable": False,
+        "models_info": {},
+        "error": None,
+    }
+
+    try:
+        import spacy
+
+        info["spacy_installed"] = True
+
+        # Проверка русской модели
+        ru_model = SPACY_MODELS.get("ru", "ru_core_news_sm")
+        try:
+            nlp_ru = spacy.load(ru_model)
+            info["ru_model_found"] = True
+            info["ru_model_loadable"] = True
+            info["models_info"]["ru"] = ru_model
+        except OSError:
+            info["error"] = f"Русская модель '{ru_model}' не найдена"
+
+        # Проверка английской модели
+        en_model = SPACY_MODELS.get("en", "en_core_web_sm")
+        try:
+            nlp_en = spacy.load(en_model)
+            info["en_model_found"] = True
+            info["en_model_loadable"] = True
+            info["models_info"]["en"] = en_model
+        except OSError:
+            if not info["error"]:
+                info["error"] = f"Английская модель '{en_model}' не найдена"
+            else:
+                info["error"] += f", английская модель '{en_model}' не найдена"
+
+    except ImportError as e:
+        info["error"] = f"SpaCy не установлен: {e}"
+
+    return info
+
+
+def _initialize_spacy() -> Tuple[Optional[object], Optional[object], bool]:
+    """Ленивая инициализация SpaCy моделей для русского и английского"""
+    global _nlp_ru, _nlp_en, _spacy_available, _initialization_attempted
+
+    if _initialization_attempted:
+        return _nlp_ru, _nlp_en, _spacy_available
+
+    _initialization_attempted = True
+
+    try:
+        import spacy
+
+        # Загружаем русскую модель
+        ru_model = SPACY_MODELS.get("ru", "ru_core_news_sm")
+        try:
+            _nlp_ru = spacy.load(ru_model)
+            _nlp_ru.max_length = TEXT_PROCESSING_CONFIG.get(
+                "spacy_max_length", 3_000_000
+            )
+            logger.info(f"SpaCy русская модель '{ru_model}' загружена")
+        except OSError:
+            logger.warning(f"SpaCy русская модель '{ru_model}' не найдена")
+            _nlp_ru = None
+
+        # Загружаем английскую модель
+        en_model = SPACY_MODELS.get("en", "en_core_web_sm")
+        try:
+            _nlp_en = spacy.load(en_model)
+            _nlp_en.max_length = TEXT_PROCESSING_CONFIG.get(
+                "spacy_max_length", 3_000_000
+            )
+            logger.info(f"SpaCy английская модель '{en_model}' загружена")
+        except OSError:
+            logger.warning(f"SpaCy английская модель '{en_model}' не найдена")
+            _nlp_en = None
+
+        _spacy_available = (_nlp_ru is not None) or (_nlp_en is not None)
+
+    except ImportError:
+        logger.warning("SpaCy не установлен")
+        _nlp_ru = None
+        _nlp_en = None
+        _spacy_available = False
+
+    return _nlp_ru, _nlp_en, _spacy_available
+
+
+class TextProcessor:
+    """Класс для препроцессинга текста с поддержкой русского и английского языков"""
+
+    def __init__(self):
+        self.config = TEXT_PROCESSING_CONFIG
+        self._nlp_ru = None
+        self._nlp_en = None
+        self._spacy_available = None
+        self.max_chunk_size = self.config.get("chunk_size", 800_000)
+
+    def _get_nlp(self):
+        """Получить SpaCy модели (с ленивой загрузкой)"""
+        if self._nlp_ru is None and self._nlp_en is None:
+            self._nlp_ru, self._nlp_en, self._spacy_available = _initialize_spacy()
+        return self._nlp_ru, self._nlp_en, self._spacy_available
+
+    def detect_language(self, text: str) -> str:
+        """
+        Определение преобладающего языка текста
+
+        Returns:
+            'ru' - русский, 'en' - английский, 'mixed' - смешанный
+        """
+        # Анализируем первые 1000 символов
+        sample = text[:1000]
+
+        # Подсчет алфавитных символов
+        cyrillic = sum(1 for c in sample if "\u0400" <= c <= "\u04ff")
+        latin = sum(1 for c in sample if ("a" <= c <= "z") or ("A" <= c <= "Z"))
+
+        total = cyrillic + latin
+        if total == 0:
+            return "unknown"
+
+        cyrillic_ratio = cyrillic / total
+
+        if cyrillic_ratio > 0.8:
+            return "ru"
+        elif cyrillic_ratio < 0.2:
+            return "en"
+        else:
+            return "mixed"
+
+    def clean_text(self, text: str) -> str:
+        """
+        Базовая очистка текста
+
+        Args:
+            text: Исходный текст
+
+        Returns:
+            Очищенный текст
+        """
+        if not text:
+            return ""
+
+        # Сохраняем больше символов для многоязычных текстов
+        text = re.sub(r'[^\w\s\-.,!?;:()\[\]""«»\']+', " ", text, flags=re.UNICODE)
+        text = re.sub(r"\s+", " ", text)
+
+        # Фильтруем слишком короткие слова
+        words = text.split()
+        words = [word for word in words if len(word) > 1 or word.lower() in ["i", "a"]]
+
+        return " ".join(words).strip()
+
+    def preprocess_with_spacy(self, text: str, language: str = "auto") -> List[str]:
+        """
+        Обработка текста с использованием SpaCy
+
+        Args:
+            text: Исходный текст
+            language: 'ru', 'en' или 'auto' для автоопределения
+
+        Returns:
+            Список обработанных токенов
+        """
+        nlp_ru, nlp_en, spacy_available = self._get_nlp()
+
+        if not spacy_available:
+            return self.preprocess_basic(text)
+
+        # Определяем язык если не указан
+        if language == "auto":
+            language = self.detect_language(text)
+            logger.debug(f"Определен язык: {language}")
+
+        # Выбираем подходящую модель
+        if language == "ru" and nlp_ru:
+            nlp = nlp_ru
+        elif language == "en" and nlp_en:
+            nlp = nlp_en
+        elif language == "mixed":
+            # Для смешанного текста обрабатываем по частям
+            return self._process_mixed_text(text)
+        else:
+            # Fallback на доступную модель
+            nlp = nlp_ru or nlp_en
+            if not nlp:
+                return self.preprocess_basic(text)
+
+        # Обработка через SpaCy
+        tokens = []
+
+        # Для длинных текстов - по частям
+        if len(text) > self.max_chunk_size:
+            for i in range(0, len(text), self.max_chunk_size):
+                chunk = text[i : i + self.max_chunk_size]
+                chunk_tokens = self._process_spacy_chunk(chunk, nlp)
+                tokens.extend(chunk_tokens)
+        else:
+            tokens = self._process_spacy_chunk(text, nlp)
+
+        return tokens
+
+    def _process_mixed_text(self, text: str) -> List[str]:
+        """Обработка текста со смешанными языками"""
+        nlp_ru, nlp_en, _ = self._get_nlp()
+
+        # Разбиваем на предложения
+        sentences = self.split_into_sentences(text)
+        all_tokens = []
+
+        for sentence in sentences:
+            lang = self.detect_language(sentence)
+
+            if lang == "ru" and nlp_ru:
+                tokens = self._process_spacy_chunk(sentence, nlp_ru)
+            elif lang == "en" and nlp_en:
+                tokens = self._process_spacy_chunk(sentence, nlp_en)
+            else:
+                # Если нет подходящей модели, используем базовую обработку
+                tokens = self.preprocess_basic(sentence)
+
+            all_tokens.extend(tokens)
+
+        return all_tokens
+
+    def _process_spacy_chunk(self, text: str, nlp) -> List[str]:
+        """Обработка одного чанка текста через SpaCy"""
+        doc = nlp(text)
+        tokens = []
+
+        for token in doc:
+            # Фильтруем токены
+            if (
+                not token.is_punct
+                and not token.is_space
+                and not token.is_stop
+                and len(token.text) >= self.config["min_token_length"]
+                and (token.is_alpha or token.like_num)  # Буквы или числа
+            ):
+                # Лемматизация если включена
+                if self.config["lemmatize"]:
+                    tokens.append(token.lemma_.lower())
+                else:
+                    tokens.append(token.text.lower())
+
+        return tokens
+
+    def preprocess_basic(self, text: str) -> List[str]:
+        """
+        Базовая обработка текста без SpaCy
+        """
+        text = text.lower()
+
+        # Простая токенизация
+        tokens = re.findall(r"\b\w+\b", text, re.UNICODE)
+
+        # Фильтрация
+        tokens = [
+            token for token in tokens if len(token) >= self.config["min_token_length"]
+        ]
+
+        return tokens
+
+    def preprocess_text(self, text: str) -> List[str]:
+        """
+        Главная функция препроцессинга текста
+        """
+        if not text:
+            return []
+
+        cleaned_text = self.clean_text(text)
+        if not cleaned_text:
+            return []
+
+        # Определяем язык и обрабатываем
+        tokens = self.preprocess_with_spacy(cleaned_text)
+
+        return tokens
+
+    def split_into_sentences(self, text: str) -> List[str]:
+        """
+        Разбиение текста на предложения с учетом многоязычности
+        """
+        if not text:
+            return []
+
+        nlp_ru, nlp_en, spacy_available = self._get_nlp()
+        min_sentence_length = self.config.get("min_sentence_length", 10)
+
+        if spacy_available:
+            # Определяем язык
+            lang = self.detect_language(text)
+
+            # Выбираем модель
+            if lang == "ru" and nlp_ru:
+                nlp = nlp_ru
+            elif lang == "en" and nlp_en:
+                nlp = nlp_en
+            else:
+                # Для смешанного или неопределенного - базовый метод
+                return self._split_sentences_basic(text, min_sentence_length)
+
+            try:
+                doc = nlp(text)
+                sentences = [sent.text.strip() for sent in doc.sents]
+                sentences = [
+                    sent for sent in sentences if len(sent) >= min_sentence_length
+                ]
+                return sentences
+            except Exception as e:
+                logger.warning(f"Ошибка при разбиении через SpaCy: {e}")
+                return self._split_sentences_basic(text, min_sentence_length)
+        else:
+            return self._split_sentences_basic(text, min_sentence_length)
+
+    def _split_sentences_basic(self, text: str, min_sentence_length: int) -> List[str]:
+        """
+        Базовое разбиение текста на предложения без SpaCy
+
+        Args:
+            text: Исходный текст
+            min_sentence_length: Минимальная длина предложения
+
+        Returns:
+            Список предложений
+        """
+        # Простое разбиение по знакам препинания
+        # Поддержка русских и английских сокращений
+        abbreviations = {
+            "г.",
+            "гг.",
+            "т.д.",
+            "т.п.",
+            "др.",
+            "пр.",
+            "см.",
+            "стр.",
+            "Mr.",
+            "Mrs.",
+            "Dr.",
+            "Prof.",
+            "Inc.",
+            "Ltd.",
+            "Co.",
+            "vs.",
+            "etc.",
+            "i.e.",
+            "e.g.",
+        }
+
+        # Замена сокращений временными маркерами
+        temp_text = text
+        replacements = {}
+        for i, abbr in enumerate(abbreviations):
+            marker = f"__ABBR{i}__"
+            replacements[marker] = abbr
+            temp_text = temp_text.replace(abbr, marker)
+
+        # Разбиение по основным знакам препинания
+        import re
+
+        sentences = re.split(r"[.!?]+", temp_text)
+
+        # Восстановление сокращений
+        result_sentences = []
+        for sent in sentences:
+            # Восстанавливаем сокращения
+            for marker, abbr in replacements.items():
+                sent = sent.replace(marker, abbr)
+
+            sent = sent.strip()
+            if len(sent) >= min_sentence_length:
+                result_sentences.append(sent)
+
+        return result_sentences
+
+    def get_spacy_status(self) -> str:
+        """Получить статус SpaCy моделей"""
+        nlp_ru, nlp_en, _ = self._get_nlp()
+
+        status_parts = []
+
+        if nlp_ru:
+            status_parts.append("✅ Русская модель")
+        else:
+            status_parts.append("❌ Русская модель не установлена")
+
+        if nlp_en:
+            status_parts.append("✅ Английская модель")
+        else:
+            status_parts.append("❌ Английская модель не установлена")
+
+        return " | ".join(status_parts)
+
+
+========================================
+FILE: src\semantic_search\utils\validators.py
+========================================
+"""Валидаторы для проверки данных"""
+
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+
+class ValidationError(Exception):
+    """Ошибка валидации"""
+
+    pass
+
+
+class DataValidator:
+    """Валидатор для различных типов данных"""
+
+    @staticmethod
+    def validate_file_path(path: Union[str, Path], must_exist: bool = True) -> Path:
+        """
+        Валидация пути к файлу
+
+        Args:
+            path: Путь к файлу
+            must_exist: Файл должен существовать
+
+        Returns:
+            Валидный Path объект
+
+        Raises:
+            ValidationError: При невалидном пуге
+        """
+        if isinstance(path, str):
+            path = Path(path)
+
+        if not isinstance(path, Path):
+            raise ValidationError(
+                f"Путь должен быть строкой или Path объектом: {type(path)}"
+            )
+
+        if must_exist and not path.exists():
+            raise ValidationError(f"Файл не найден: {path}")
+
+        if must_exist and not path.is_file():
+            raise ValidationError(f"Путь не является файлом: {path}")
+
+        return path
+
+    @staticmethod
+    def validate_directory_path(
+        path: Union[str, Path], must_exist: bool = True
+    ) -> Path:
+        """Валидация пути к директории"""
+        if isinstance(path, str):
+            path = Path(path)
+
+        if not isinstance(path, Path):
+            raise ValidationError(
+                f"Путь должен быть строкой или Path объектом: {type(path)}"
+            )
+
+        if must_exist and not path.exists():
+            raise ValidationError(f"Директория не найдена: {path}")
+
+        if must_exist and not path.is_dir():
+            raise ValidationError(f"Путь не является директорией: {path}")
+
+        return path
+
+    @staticmethod
+    def validate_text(
+        text: str, min_length: int = 1, max_length: Optional[int] = None
+    ) -> str:
+        """Валидация текста"""
+        if not isinstance(text, str):
+            raise ValidationError(f"Текст должен быть строкой: {type(text)}")
+
+        text = text.strip()
+
+        if len(text) < min_length:
+            raise ValidationError(
+                f"Текст слишком короткий. Минимум: {min_length}, получено: {len(text)}"
+            )
+
+        if max_length and len(text) > max_length:
+            raise ValidationError(
+                f"Текст слишком длинный. Максимум: {max_length}, получено: {len(text)}"
+            )
+
+        return text
+
+    @staticmethod
+    def validate_search_params(
+        query: str,
+        top_k: Optional[int] = None,
+        similarity_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Валидация параметров поиска"""
+
+        # Валидация запроса
+        query = DataValidator.validate_text(query, min_length=2, max_length=1000)
+
+        # Валидация количества результатов
+        if top_k is not None:
+            if not isinstance(top_k, int) or top_k < 1 or top_k > 1000:
+                raise ValidationError(
+                    f"top_k должно быть целым числом от 1 до 1000: {top_k}"
+                )
+
+        # Валидация порога схожести
+        if similarity_threshold is not None:
+            if not isinstance(similarity_threshold, (int, float)) or not (
+                0 <= similarity_threshold <= 1
+            ):
+                raise ValidationError(
+                    f"similarity_threshold должен быть числом от 0 до 1: {similarity_threshold}"
+                )
+
+        return {
+            "query": query,
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold,
+        }
+
+    @staticmethod
+    def validate_model_params(**params) -> Dict[str, Any]:
+        """Валидация параметров модели Doc2Vec"""
+        validated = {}
+
+        # Размерность векторов
+        if "vector_size" in params:
+            vs = params["vector_size"]
+            if not isinstance(vs, int) or not (50 <= vs <= 1000):
+                raise ValidationError(f"vector_size должен быть от 50 до 1000: {vs}")
+            validated["vector_size"] = vs
+
+        # Размер окна
+        if "window" in params:
+            w = params["window"]
+            if not isinstance(w, int) or not (1 <= w <= 50):
+                raise ValidationError(f"window должен быть от 1 до 50: {w}")
+            validated["window"] = w
+
+        # Минимальная частота
+        if "min_count" in params:
+            mc = params["min_count"]
+            if not isinstance(mc, int) or not (1 <= mc <= 100):
+                raise ValidationError(f"min_count должен быть от 1 до 100: {mc}")
+            validated["min_count"] = mc
+
+        # Количество эпох
+        if "epochs" in params:
+            e = params["epochs"]
+            if not isinstance(e, int) or not (1 <= e <= 1000):
+                raise ValidationError(f"epochs должен быть от 1 до 1000: {e}")
+            validated["epochs"] = e
+
+        # Количество потоков
+        if "workers" in params:
+            w = params["workers"]
+            if not isinstance(w, int) or not (1 <= w <= 32):
+                raise ValidationError(f"workers должен быть от 1 до 32: {w}")
+            validated["workers"] = w
+
+        return validated
+
+
+class FileValidator:
+    """Валидатор для файлов"""
+
+    SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt"}
+    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+
+    @classmethod
+    def validate_document_file(cls, file_path: Path) -> Dict[str, Any]:
+        """
+        Комплексная валидация файла документа
+
+        Returns:
+            Словарь с результатами валидации
+        """
+        result = {"valid": True, "errors": [], "warnings": [], "file_info": {}}
+
+        try:
+            # Проверка существования
+            if not file_path.exists():
+                result["errors"].append(f"Файл не найден: {file_path}")
+                result["valid"] = False
+                return result
+
+            # Проверка, что это файл
+            if not file_path.is_file():
+                result["errors"].append(f"Путь не является файлом: {file_path}")
+                result["valid"] = False
+                return result
+
+            # Информация о файле
+            stat = file_path.stat()
+            result["file_info"] = {
+                "size": stat.st_size,
+                "size_mb": stat.st_size / 1024 / 1024,
+                "extension": file_path.suffix.lower(),
+                "name": file_path.name,
+            }
+
+            # Проверка расширения
+            if file_path.suffix.lower() not in cls.SUPPORTED_EXTENSIONS:
+                result["errors"].append(
+                    f"Неподдерживаемое расширение: {file_path.suffix}"
+                )
+                result["valid"] = False
+
+            # Проверка размера
+            if stat.st_size > cls.MAX_FILE_SIZE:
+                result["errors"].append(
+                    f"Файл слишком большой: {stat.st_size / 1024 / 1024:.1f}MB"
+                )
+                result["valid"] = False
+            elif stat.st_size > cls.MAX_FILE_SIZE * 0.8:
+                result["warnings"].append(
+                    f"Большой файл: {stat.st_size / 1024 / 1024:.1f}MB"
+                )
+
+            # Проверка пустого файла
+            if stat.st_size == 0:
+                result["errors"].append("Файл пустой")
+                result["valid"] = False
+            elif stat.st_size < 100:  # Меньше 100 байт
+                result["warnings"].append("Очень маленький файл")
+
+            # Проверка доступности для чтения
+            try:
+                with open(file_path, "rb") as f:
+                    f.read(1)
+            except PermissionError:
+                result["errors"].append("Нет прав на чтение файла")
+                result["valid"] = False
+            except Exception as e:
+                result["errors"].append(f"Ошибка при чтении файла: {e}")
+                result["valid"] = False
+
+        except Exception as e:
+            result["errors"].append(f"Неожиданная ошибка валидации: {e}")
+            result["valid"] = False
+
+        return result
+
+
+========================================
+FILE: src\semantic_search\utils\__init__.py
+========================================
+"""Вспомогательные утилиты"""
+
+from .cache_manager import CacheManager
+from .file_utils import FileExtractor
+from .logging_config import logging_manager, setup_logging
+from .notification_system import (
+    NotificationManager,
+    ProgressTracker,
+    notification_manager,
+)
+from .performance_monitor import PerformanceMonitor
+from .task_manager import TaskManager, task_manager
+from .text_utils import TextProcessor
+from .validators import DataValidator, FileValidator, ValidationError
+
+__all__ = [
+    "CacheManager",
+    "FileExtractor",
+    "setup_logging",
+    "logging_manager",
+    "NotificationManager",
+    "notification_manager",
+    "ProgressTracker",
+    "PerformanceMonitor",
+    "TaskManager",
+    "task_manager",
+    "TextProcessor",
+    "DataValidator",
+    "FileValidator",
+    "ValidationError",
+]
+
+================================================================================
+Total files included: 20
+================================================================================

@@ -281,48 +281,6 @@ poetry run pytest tests/test_core_functionality.py
 poetry run pytest tests/ -k "performance" --benchmark-only
 ```
 
-## 📁 Структура проекта
-
-```
-semantic-search/
-├── README.md                            # Информация о проекте
-├── config/                              # Сохраненные настройки
-│   └── app_config.json
-├── data/                                # Данные и модели
-│   ├── cache/                           # Кэш
-│   ├── models/                          # Обученные модели
-│   └── temp/                            # Временные файлы
-├── logs/                                # Логи
-├── pyproject.toml                       # Конфигурация Poetry
-├── scripts/                             # Вспомогательные скрипты
-│   ├── build.py
-│   ├── print_project_tree.py
-│   └── setup_spacy.py
-├── src/
-│   └── semantic_search/
-│       ├── config.py                    # Настройки
-│       ├── core/                        # Основная логика
-│       │   ├── doc2vec_trainer.py
-│       │   ├── document_processor.py
-│       │   ├── search_engine.py
-│       │   └── text_summarizer.py
-│       ├── gui/                         # Графический интерфейс
-│       │   └── main_window.py
-│       ├── main.py                      # Точка входа
-│       └── utils/                       # Вспомогательные модули
-│           ├── cache_manager.py
-│           ├── file_utils.py
-│           ├── logging_config.py
-│           ├── notification_system.py
-│           ├── performance_monitor.py
-│           ├── statistics.py
-│           ├── task_manager.py
-│           ├── text_utils.py
-│           └── validators.py
-└── tests/                               # Тесты
-    └── test_core_functionality.py
-```
-
 ## ⚙️ Конфигурация
 
 Приложение автоматически создает файл конфигурации `config/app_config.json` при первом запуске.
