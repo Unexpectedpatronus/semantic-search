@@ -1,0 +1,57 @@
+% Основной документ дипломной работы
+% main.tex
+
+% Подключение преамбулы
+\input{preamble}
+
+\begin{document}
+	
+	% Титульный лист
+	\includepdf{VKR_titul_pdf}
+	\clearpage
+	%\pagestyle{empty}
+	%\input{title}
+	
+	% Задание на ВКР и календарный план
+	%\input{zad_plan}
+	
+	% Реферат
+	\pagenumbering{arabic}
+	\setcounter{page}{5}
+	\input{referat}
+	\clearpage
+	
+	
+	% Содержание
+	\renewcommand{\contentsname}{СОДЕРЖАНИЕ}
+	\tableofcontents
+	\clearpage
+	
+	% Определения
+	\input{opredeleniya}
+	
+	% Обозначения и сокращения
+	\input{oboznacheniya}
+	% Введение
+	\input{vvedenie}
+	
+
+	% Основные разделы
+	\input{analiticheskiy_razdel}
+	\input{konstruktorskiy_razdel}
+	\input{tekhnologicheskiy_razdel}
+	\input{issledovatelskiy_razdel}
+
+	
+	% Заключение
+	\input{zaklyuchenie}
+	
+	% Список использованных источников
+	\input{spisok_istochnikov}
+	
+	% Приложения
+	\appendix
+	\input{prilozheniya}
+
+	
+\end{document}
